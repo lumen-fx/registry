@@ -9,14 +9,14 @@ import (
 	"io/fs"
 	"log/slog"
 	"lpm-server/src"
-	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	"github.com/joho/godotenv"
 )
+
+const listenAddr = ":8080"
 
 func main() {
 	logger := src.ConfigLogging()
@@ -45,43 +45,5 @@ func run(logger *slog.Logger) error {
 	}
 	defer dbpool.Close()
 
-	poolConfig := dbpool.Config()
-	logger.Info("database pool ready",
-		slog.String("host", poolConfig.ConnConfig.Host),
-		slog.String("database", poolConfig.ConnConfig.Database),
-		slog.Int("maxConns", int(poolConfig.MaxConns)))
-
-	srvApp := src.NewServer(dbpool)
-
-	httpServer := &http.Server{
-		Addr: ":8080",
-		// RequestLogger is outermost so it records the 500 Recoverer writes.
-		Handler:      src.Chain(srvApp.Routes(), src.RequestLogger(logger), src.Recoverer(), src.Timeout(5*time.Second)),
-		IdleTimeout:  time.Minute,
-		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 30 * time.Second,
-	}
-
-	srvErr := make(chan error, 1)
-	go func() {
-		logger.Info("server starting", slog.String("addr", httpServer.Addr))
-		if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			srvErr <- err
-		}
-	}()
-
-	select {
-	case err := <-srvErr:
-		return fmt.Errorf("listen: %w", err)
-	case <-ctx.Done():
-		logger.Info("shutting down server gracefully")
-	}
-
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	if err := httpServer.Shutdown(shutdownCtx); err != nil {
-		return fmt.Errorf("shutdown forced: %w", err)
-	}
-
-	return nil
+	return src.Serve(ctx, logger, dbpool, listenAddr)
 }
