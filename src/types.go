@@ -1,4 +1,4 @@
-package main
+package src
 
 // Domain types and request/response payloads. `db` tags feed
 // pgx.RowToStructByName; `json` tags define the wire format.

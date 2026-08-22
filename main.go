@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"lpm-server/src"
 	"net/http"
 	"os"
 	"os/signal"
@@ -18,7 +19,7 @@ import (
 )
 
 func main() {
-	logger := configLogging()
+	logger := src.ConfigLogging()
 
 	// A missing .env is normal outside local dev, where the environment is
 	// already populated. Anything else (bad syntax, unreadable file) is fatal.
@@ -38,7 +39,7 @@ func run(logger *slog.Logger) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	dbpool, err := configPostgres(ctx)
+	dbpool, err := src.ConfigPostgres(ctx)
 	if err != nil {
 		return fmt.Errorf("postgres: %w", err)
 	}
@@ -50,12 +51,12 @@ func run(logger *slog.Logger) error {
 		slog.String("database", poolConfig.ConnConfig.Database),
 		slog.Int("maxConns", int(poolConfig.MaxConns)))
 
-	srvApp := NewServer(dbpool)
+	srvApp := src.NewServer(dbpool)
 
 	httpServer := &http.Server{
 		Addr: ":8080",
 		// RequestLogger is outermost so it records the 500 Recoverer writes.
-		Handler:      Chain(srvApp.Routes(), RequestLogger(logger), Recoverer(), Timeout(5*time.Second)),
+		Handler:      src.Chain(srvApp.Routes(), src.RequestLogger(logger), src.Recoverer(), src.Timeout(5*time.Second)),
 		IdleTimeout:  time.Minute,
 		ReadTimeout:  10 * time.Second,
 		WriteTimeout: 30 * time.Second,

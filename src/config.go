@@ -1,4 +1,4 @@
-package main
+package src
 
 // Process configuration: logging and the Postgres pool.
 
@@ -13,7 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-func configLogging() *slog.Logger {
+func ConfigLogging() *slog.Logger {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
 		Level: slog.LevelInfo,
 	}))
@@ -22,7 +22,7 @@ func configLogging() *slog.Logger {
 	return logger
 }
 
-func configPostgres(ctx context.Context) (*pgxpool.Pool, error) {
+func ConfigPostgres(ctx context.Context) (*pgxpool.Pool, error) {
 	connStr := os.Getenv("DATABASE_URL")
 	if connStr == "" {
 		// ParseConfig("") succeeds and silently falls back to libpq defaults

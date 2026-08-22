@@ -1,4 +1,4 @@
-package main
+package src
 
 // HTTP handlers. Each one decodes input, validates it, calls a store method,
 // and hands the result to writeJSON / writeError.

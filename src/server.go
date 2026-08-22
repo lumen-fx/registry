@@ -1,4 +1,4 @@
-package main
+package src
 
 // Server holds the dependencies every handler needs, and owns the routing table.
 
