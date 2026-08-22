@@ -1,0 +1,68 @@
+name: ci
+
+# Format, vet, and test the module. All three are required checks on main.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # The merge queue runs these same jobs against the queued merge commit, and
+  # they are required checks on main. Without this trigger the workflow never
+  # reports a result there and queued pull requests wait forever.
+  merge_group:
+  workflow_dispatch:
+
+# One run per ref. A new push cancels the run it supersedes. Merge-queue refs
+# are unique per queued merge, so this never cancels a queue entry.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  fmt:
+    name: fmt
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: gofmt
+        run: |
+          set -euo pipefail
+          out=$(gofmt -l .)
+          if [ -n "$out" ]; then
+            echo "gofmt needs to run on:"
+            echo "$out"
+            exit 1
+          fi
+
+  vet:
+    name: vet
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: go vet
+        run: go vet ./...
+
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: go build
+        run: go build ./...
+      - name: go test
+        run: go test -race ./...

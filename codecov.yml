@@ -1,0 +1,18 @@
+# Coverage gates on the change, not the whole tree: the project status is
+# informational, while the patch status is a required check and fails when
+# less than 80 percent of the diff's new lines are covered.
+#
+# The target is a fixed number rather than `auto`. An auto target is main's
+# own coverage at the time of the run, so it moves, and a pull request is
+# graded against one base while the merge queue grades the same diff against
+# another. A change could pass on the pull request, fail on the queue commit,
+# and get ejected every time it was requeued.
+
+coverage:
+  status:
+    project:
+      default:
+        informational: true
+    patch:
+      default:
+        target: "80%"
