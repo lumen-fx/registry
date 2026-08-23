@@ -1,0 +1,54 @@
+name: codeql
+
+# CodeQL security analysis of the Go service and the workflow files. Go is
+# analyzed with autobuild, which runs the module build the same way CI does;
+# the workflows scan without a build. Alerts land on the repository Security
+# tab, and the main-branch ruleset requires a result from this analysis
+# before a pull request can merge.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # Weekly sweep so updated queries reach main without waiting for a push.
+  schedule:
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+
+# One run per ref. A new push cancels the run it supersedes.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: actions
+            build-mode: none
+          - language: go
+            build-mode: autobuild
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: init
+        uses: github/codeql-action/init@v4
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+
+      - name: analyze
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: "/language:${{ matrix.language }}"
