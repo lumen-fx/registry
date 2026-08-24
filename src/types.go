@@ -68,6 +68,7 @@ type UserResetPassword struct {
 type Release struct {
 	ID          uuid.UUID `json:"id" db:"id"`
 	PackageID   uuid.UUID `json:"-" db:"package_id"`
+	URL         string    `json:"url" db:"url"`
 	Version     string    `json:"version" db:"version"`
 	Description string    `json:"description" db:"description"`
 	CreatedAt   time.Time `json:"createdAt" db:"created_at"`
@@ -93,4 +94,10 @@ type Package struct {
 	Releases    []Release   `json:"releases" db:"-"`
 	Publisher   *PublicUser `json:"publisher,omitempty" db:"-"`
 	CreatedAt   time.Time   `json:"createdAt" db:"created_at"`
+}
+
+type NewPackage struct {
+	Platform    string `json:"platform" db:"platform"`
+	Name        string `json:"name" db:"name"`
+	Description string `json:"description" db:"description"`
 }
