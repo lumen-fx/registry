@@ -1,7 +1,5 @@
 package src
 
-// Server holds the dependencies every handler needs, and owns the routing table.
-
 import (
 	"net/http"
 	"strings"
@@ -17,12 +15,11 @@ func NewServer(db *pgxpool.Pool) *Server {
 	return &Server{db: db}
 }
 
-// Routes pairs each path with a bare pattern. ServeMux prefers the
-// method-qualified one, so the bare one catches method mismatches as JSON 405.
+// Routes maps paths. Bare patterns give JSON 405s.
 func (s *Server) Routes() *http.ServeMux {
 	mux := http.NewServeMux()
 
-	mux.HandleFunc("/", notFound) // least specific: catches everything unrouted
+	mux.HandleFunc("/", notFound) // catches everything unrouted
 
 	mux.HandleFunc("GET /{$}", s.RootHandler)
 	mux.HandleFunc("/{$}", methodNotAllowed(http.MethodGet))
@@ -42,17 +39,33 @@ func (s *Server) Routes() *http.ServeMux {
 	mux.HandleFunc("POST /user/change_password", s.UserChangePasswordHandler)
 	mux.HandleFunc("/user/change_password", methodNotAllowed(http.MethodPost))
 
+	mux.HandleFunc("GET /users/{username}/packages", s.UserPackagesHandler)
+	mux.HandleFunc("/users/{username}/packages", methodNotAllowed(http.MethodGet))
+
+	mux.HandleFunc("GET /packages", s.SearchPackagesHandler)
+	mux.HandleFunc("POST /packages", s.PublishPackageHandler)
+	mux.HandleFunc("/packages", methodNotAllowed(http.MethodGet, http.MethodPost))
+
+	mux.HandleFunc("GET /packages/{package}", s.GetPackageHandler)
+	mux.HandleFunc("/packages/{package}", methodNotAllowed(http.MethodGet))
+
+	mux.HandleFunc("GET /packages/{package}/releases", s.PackageReleasesHandler)
+	mux.HandleFunc("POST /packages/{package}/releases", s.PublishReleaseHandler)
+	mux.HandleFunc("/packages/{package}/releases", methodNotAllowed(http.MethodGet, http.MethodPost))
+
+	mux.HandleFunc("GET /packages/{package}/releases/{version}", s.GetReleaseHandler)
+	mux.HandleFunc("/packages/{package}/releases/{version}", methodNotAllowed(http.MethodGet))
+
 	return mux
 }
 
-// notFound answers unrouted paths in the API's JSON error shape.
 func notFound(w http.ResponseWriter, r *http.Request) {
 	writeError(w, r, http.StatusNotFound, "no route matches "+r.Method+" "+r.URL.Path)
 }
 
-// methodNotAllowed sets the Allow header RFC 9110 requires on a 405.
+// Sets the Allow header a 405 requires.
 func methodNotAllowed(allowed ...string) http.HandlerFunc {
-	// GET routes also serve HEAD; every route answers OPTIONS.
+	// GET routes also serve HEAD. All answer OPTIONS.
 	advertised := append([]string{}, allowed...)
 	for _, m := range allowed {
 		if m == http.MethodGet {
