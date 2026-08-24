@@ -1,5 +1,4 @@
 -- RESTRICT keeps published packages from being orphaned.
-
 CREATE TABLE IF NOT EXISTS packages (
     id           uuid        PRIMARY KEY DEFAULT uuid_generate_v4(),
     publisher_id uuid        NOT NULL
@@ -7,9 +6,11 @@ CREATE TABLE IF NOT EXISTS packages (
                              ON DELETE RESTRICT
                              ON UPDATE CASCADE,
     platform     text        NOT NULL,
-    name         text        NOT NULL UNIQUE,
+    name         text        NOT NULL,
     description  text        NOT NULL DEFAULT '',
     created_at   timestamptz NOT NULL DEFAULT now(),
+
+    CONSTRAINT packages_platform_name_key UNIQUE (platform, name),
 
     CONSTRAINT packages_platform_not_empty CHECK (platform <> ''),
     CONSTRAINT packages_name_not_empty     CHECK (name <> '')

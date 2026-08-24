@@ -4,7 +4,6 @@ CREATE TABLE IF NOT EXISTS releases (
                             REFERENCES packages (id)
                             ON DELETE CASCADE
                             ON UPDATE CASCADE,
-    url         text        NOT NULL,
     version     text        NOT NULL,
     description text        NOT NULL DEFAULT '',
     created_at  timestamptz NOT NULL DEFAULT now(),

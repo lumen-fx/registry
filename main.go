@@ -16,8 +16,12 @@ import (
 
 const listenAddr = ":8080"
 
+// Set by the linker in release builds.
+var version = "dev"
+
 func main() {
 	logger := src.ConfigLogging()
+	logger = logger.With(slog.String("version", version))
 
 	// A missing .env is normal. Bad syntax is fatal.
 	if err := godotenv.Load(); err != nil && !errors.Is(err, fs.ErrNotExist) {
@@ -35,6 +39,13 @@ func main() {
 func run(logger *slog.Logger) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	// Local dev convenience. Kubernetes runs cmd/migrate as a Job instead.
+	if os.Getenv("MIGRATE_ON_BOOT") == "true" {
+		if err := src.RunMigrations(os.Getenv("DATABASE_URL")); err != nil {
+			return err
+		}
+	}
 
 	dbpool, err := src.ConfigPostgres(ctx)
 	if err != nil {
