@@ -1,13 +1,4 @@
--- 003_packages.sql
--- Maps to the Package struct in types.go.
---
--- Package.Releases and Package.Publisher are db:"-" — they are assembled in Go
--- from the releases and users tables, not stored here.
---
--- ON DELETE RESTRICT on publisher_id: a user who has published cannot be
--- deleted while their packages exist. Deleting the row would either orphan the
--- packages or silently remove published artifacts, so the delete is refused
--- until the packages are dealt with explicitly.
+-- RESTRICT keeps published packages from being orphaned.
 
 CREATE TABLE IF NOT EXISTS packages (
     id           uuid        PRIMARY KEY DEFAULT uuid_generate_v4(),

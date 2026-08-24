@@ -14,7 +14,7 @@ func discardLogger() *slog.Logger {
 }
 
 func TestConfigLogging(t *testing.T) {
-	// slog.SetDefault is process-global; put the old default back.
+	// slog default is global. Restore it.
 	original := slog.Default()
 	t.Cleanup(func() { slog.SetDefault(original) })
 
@@ -41,8 +41,7 @@ func TestConfigPostgresRejectsUnsetURL(t *testing.T) {
 		pool.Close()
 		t.Fatal("ConfigPostgres succeeded with no DATABASE_URL, want an error")
 	}
-	// An empty string parses fine and silently falls back to libpq defaults,
-	// so this must be rejected by name rather than by parse failure.
+	// Empty string parses fine, so reject it by name.
 	if !strings.Contains(err.Error(), "DATABASE_URL") {
 		t.Errorf("error = %v, want it to name DATABASE_URL", err)
 	}
@@ -62,7 +61,7 @@ func TestConfigPostgresRejectsUnparsableURL(t *testing.T) {
 }
 
 func TestConfigPostgresRejectsUnreachableDatabase(t *testing.T) {
-	// Port 1 refuses immediately, so the ping fails well inside its timeout.
+	// Port 1 refuses immediately.
 	t.Setenv("DATABASE_URL", "postgres://user:pass@127.0.0.1:1/testdb")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)

@@ -1,8 +1,5 @@
 package src
 
-// HTTP server construction and lifecycle. Kept here rather than in main so the
-// wiring is reachable from tests.
-
 import (
 	"context"
 	"errors"
@@ -15,19 +12,17 @@ import (
 )
 
 const (
-	// requestTimeout bounds a single request; WriteTimeout stays above it so a
-	// timed-out handler still gets to write its response.
+	// WriteTimeout stays above it so handlers can still reply.
 	requestTimeout = 5 * time.Second
 	shutdownGrace  = 10 * time.Second
 )
 
-// NewHTTPServer builds the server with its middleware stack and timeouts.
 func NewHTTPServer(logger *slog.Logger, db *pgxpool.Pool, addr string) *http.Server {
 	app := NewServer(db)
 
 	return &http.Server{
 		Addr: addr,
-		// RequestLogger is outermost so it records the 500 Recoverer writes.
+		// Outermost, so it logs the 500 Recoverer writes.
 		Handler:      Chain(app.Routes(), RequestLogger(logger), Recoverer(), Timeout(requestTimeout)),
 		IdleTimeout:  time.Minute,
 		ReadTimeout:  10 * time.Second,
@@ -35,8 +30,7 @@ func NewHTTPServer(logger *slog.Logger, db *pgxpool.Pool, addr string) *http.Ser
 	}
 }
 
-// Serve runs the server until ctx is cancelled, then drains in-flight requests.
-// A listen failure returns immediately instead of waiting for the signal.
+// Serve runs until ctx is cancelled, then drains requests.
 func Serve(ctx context.Context, logger *slog.Logger, db *pgxpool.Pool, addr string) error {
 	poolConfig := db.Config()
 	logger.Info("database pool ready",

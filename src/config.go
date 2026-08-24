@@ -1,7 +1,5 @@
 package src
 
-// Process configuration: logging and the Postgres pool.
-
 import (
 	"context"
 	"errors"
@@ -25,8 +23,7 @@ func ConfigLogging() *slog.Logger {
 func ConfigPostgres(ctx context.Context) (*pgxpool.Pool, error) {
 	connStr := os.Getenv("DATABASE_URL")
 	if connStr == "" {
-		// ParseConfig("") succeeds and silently falls back to libpq defaults
-		// (localhost, current OS user), so reject it explicitly.
+		// Empty string falls back to libpq defaults.
 		return nil, errors.New("DATABASE_URL is not set")
 	}
 
@@ -43,12 +40,11 @@ func ConfigPostgres(ctx context.Context) (*pgxpool.Pool, error) {
 		return nil, fmt.Errorf("create connection pool: %w", err)
 	}
 
-	// NewWithConfig is lazy, so nothing has dialed yet. Ping proves the database
-	// is reachable at boot instead of on the first request.
+	// Pool is lazy. Ping proves the database is reachable.
 	pingCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	if err := pool.Ping(pingCtx); err != nil {
-		pool.Close() // we own the pool until we hand it back
+		pool.Close() // we still own the pool
 		return nil, fmt.Errorf("ping database: %w", err)
 	}
 

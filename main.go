@@ -1,7 +1,5 @@
 package main
 
-// Process lifecycle: environment, dependency wiring, serve, graceful shutdown.
-
 import (
 	"context"
 	"errors"
@@ -21,8 +19,7 @@ const listenAddr = ":8080"
 func main() {
 	logger := src.ConfigLogging()
 
-	// A missing .env is normal outside local dev, where the environment is
-	// already populated. Anything else (bad syntax, unreadable file) is fatal.
+	// A missing .env is normal. Bad syntax is fatal.
 	if err := godotenv.Load(); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		logger.Error("load .env", slog.Any("error", err))
 		os.Exit(1)
@@ -34,7 +31,7 @@ func main() {
 	}
 }
 
-// run holds everything that needs deferred cleanup, so main can os.Exit safely.
+// Holds deferred cleanup so main can os.Exit.
 func run(logger *slog.Logger) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

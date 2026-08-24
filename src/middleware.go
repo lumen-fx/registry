@@ -14,6 +14,7 @@ import (
 type Middleware func(http.Handler) http.Handler
 
 func Chain(h http.Handler, mw ...Middleware) http.Handler {
+	// Applied in reverse so mw[0] ends up outermost.
 	for i := len(mw) - 1; i >= 0; i-- {
 		h = mw[i](h)
 	}
@@ -29,7 +30,7 @@ type responseRecorder struct {
 
 func (rec *responseRecorder) WriteHeader(code int) {
 	if rec.wroteHeader {
-		return // swallow the duplicate; net/http would log "superfluous WriteHeader"
+		return // net/http would log "superfluous WriteHeader"
 	}
 	rec.wroteHeader = true
 	rec.status = code
@@ -45,6 +46,7 @@ func (rec *responseRecorder) Write(b []byte) (int, error) {
 	return n, err
 }
 
+// Unwrap lets http.ResponseController reach the real writer.
 func (rec *responseRecorder) Unwrap() http.ResponseWriter { return rec.ResponseWriter }
 
 func (rec *responseRecorder) WroteHeader() bool { return rec.wroteHeader }
@@ -108,8 +110,7 @@ func RequestLogger(logger *slog.Logger) Middleware {
 	}
 }
 
-// Timeout bounds a request so a stalled query is cancelled instead of holding
-// a pool connection until the client gives up.
+// Timeout cancels a stalled request instead of holding a connection.
 func Timeout(d time.Duration) Middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -126,12 +127,12 @@ func Recoverer() Middleware {
 			defer func() {
 				if rv := recover(); rv != nil {
 					if errors.Is(r.Context().Err(), context.Canceled) {
-						return // client hung up mid-write, not our bug
+						return // client hung up mid-write
 					}
 					LoggerFrom(r.Context()).Error("panic in handler",
 						slog.Any("panic", rv),
 						slog.String("stack", string(debug.Stack())))
-					// Partial response already sent; appending would corrupt it.
+					// Partial response already sent. Appending would corrupt it.
 					if started, ok := w.(responseStarter); ok && started.WroteHeader() {
 						return
 					}
