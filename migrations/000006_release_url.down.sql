@@ -1,0 +1,2 @@
+ALTER TABLE releases DROP CONSTRAINT IF EXISTS releases_url_not_empty;
+ALTER TABLE releases DROP COLUMN IF EXISTS url;

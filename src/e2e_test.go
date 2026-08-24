@@ -32,13 +32,9 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 
-	schema, err := os.ReadFile("../sql/schema.sql")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "e2e: read schema: %v\n", err)
-		os.Exit(1)
-	}
-	if _, err := pool.Exec(ctx, string(schema)); err != nil {
-		fmt.Fprintf(os.Stderr, "e2e: apply schema: %v\n", err)
+	// The migrations build the schema, so every run tests them too.
+	if err := RunMigrations(dsn); err != nil {
+		fmt.Fprintf(os.Stderr, "e2e: %v\n", err)
 		os.Exit(1)
 	}
 
