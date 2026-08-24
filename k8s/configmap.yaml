@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: lpm-server
+  namespace: lpm
+data:
+  # The migration Job owns the schema. A server that migrated on boot would
+  # race the other replicas during a rollout.
+  MIGRATE_ON_BOOT: "false"

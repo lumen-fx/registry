@@ -1,0 +1,99 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lpm-server
+  namespace: lpm
+  labels:
+    app.kubernetes.io/name: lpm-server
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: lpm-server
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: lpm-server
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      # Serve returns once the drain finishes, so give it room above the ten
+      # second grace the shutdown itself allows.
+      terminationGracePeriodSeconds: 30
+      # ConfigPostgres pings at boot and the process exits if that fails, so
+      # waiting here avoids a crash loop while Postgres starts.
+      initContainers:
+        - name: wait-for-postgres
+          image: postgres:18
+          command:
+            - sh
+            - -c
+            # -U is required: this runs as a uid with no passwd entry, so
+            # libpq cannot guess a user and pg_isready never connects.
+            - until pg_isready -h postgres -p 5432 -U lpm; do sleep 2; done
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 25m
+              memory: 32Mi
+            limits:
+              memory: 64Mi
+      containers:
+        - name: server
+          image: ghcr.io/lumen-fx/registry:latest
+          ports:
+            - name: http
+              containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: lpm-server
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: lpm-postgres
+                  key: DATABASE_URL
+          # Liveness stays off the database. /health reports the pool, so a
+          # database blip would restart every pod instead of failing readiness.
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 5
+            failureThreshold: 2
+          # The pool pings at boot, so a slow database delays the first pass.
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 2
+            failureThreshold: 30
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]

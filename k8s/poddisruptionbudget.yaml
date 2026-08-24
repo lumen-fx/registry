@@ -1,0 +1,11 @@
+# Keeps one replica serving while a node drains.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: lpm-server
+  namespace: lpm
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: lpm-server
