@@ -19,11 +19,9 @@ CREATE TABLE IF NOT EXISTS packages (
                              ON DELETE RESTRICT
                              ON UPDATE CASCADE,
     platform     text        NOT NULL,
-    name         text        NOT NULL,
+    name         text        NOT NULL UNIQUE,
     description  text        NOT NULL DEFAULT '',
     created_at   timestamptz NOT NULL DEFAULT now(),
-
-    CONSTRAINT packages_platform_name_key UNIQUE (platform, name),
 
     CONSTRAINT packages_platform_not_empty CHECK (platform <> ''),
     CONSTRAINT packages_name_not_empty     CHECK (name <> '')
