@@ -38,6 +38,7 @@ func (s *Server) createUser(ctx context.Context, u UserRegister) (*User, error) 
 		return nil, fmt.Errorf("create user: %w", err)
 	}
 
+	// A conflict returns no rows, so no rows means duplicate.
 	user, err := pgx.CollectExactlyOneRow(rows, pgx.RowToStructByName[User])
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrUserExists
@@ -45,11 +46,12 @@ func (s *Server) createUser(ctx context.Context, u UserRegister) (*User, error) 
 	if err != nil {
 		return nil, fmt.Errorf("collect user: %w", err)
 	}
-	user.Packages = []Package{} // a new account has none; [] reads better than null
+	user.Packages = []Package{} // [] reads better than null
 	return &user, nil
 }
 
-func (s *Server) getUser(ctx context.Context, username string) (*User, error) {
+// Skips the profile queries so auth timing stays flat.
+func (s *Server) getUserRow(ctx context.Context, username string) (*User, error) {
 	rows, err := s.db.Query(ctx,
 		`SELECT `+userColumns+` FROM users WHERE username = $1`, username)
 	if err != nil {
@@ -64,8 +66,16 @@ func (s *Server) getUser(ctx context.Context, username string) (*User, error) {
 		return nil, fmt.Errorf("collect user: %w", err)
 	}
 
-	// Capped: a prolific publisher should not turn one profile lookup into an
-	// unbounded response.
+	return &user, nil
+}
+
+func (s *Server) getUser(ctx context.Context, username string) (*User, error) {
+	user, err := s.getUserRow(ctx, username)
+	if err != nil {
+		return nil, err
+	}
+
+	// Capped so one profile lookup stays bounded.
 	user.Packages, err = s.listPackages(ctx, PackageFilter{
 		Username: user.Username,
 		Limit:    packagesMaxLimit,
@@ -74,12 +84,14 @@ func (s *Server) getUser(ctx context.Context, username string) (*User, error) {
 		return nil, fmt.Errorf("list user packages: %w", err)
 	}
 
-	return &user, nil
+	return user, nil
 }
 
+// Returns the bare row. Callers load the profile.
 func (s *Server) verifyLogin(ctx context.Context, login UserLogin) (*User, error) {
-	user, err := s.getUser(ctx, login.Username)
+	user, err := s.getUserRow(ctx, login.Username)
 	if errors.Is(err, ErrUserNotFound) {
+		// Same argon2 cost as a real account.
 		_, _ = argon2id.CreateHash(login.Password, argon2id.DefaultParams)
 		return nil, ErrInvalidCredentials
 	}
@@ -123,20 +135,6 @@ func (s *Server) changePassword(ctx context.Context, reset UserResetPassword) er
 	return nil
 }
 
-func (s *Server) requireAuth(ctx context.Context, username, password string) error {
-	var loginUser = UserLogin{
-		Username: username,
-		Password: password,
-	}
-
-	user, err := s.verifyLogin(ctx, loginUser)
-	if err != nil || user == nil {
-		return ErrInvalidCredentials
-	}
-
-	return nil
-}
-
 const packageColumns = `id, publisher_id, platform, name, description, created_at`
 
 const (
@@ -144,8 +142,7 @@ const (
 	packagesMaxLimit     = 200
 )
 
-// escapeLike neutralises LIKE wildcards in user input, so a search for "a_b"
-// means a_b and not "a<anything>b".
+// Stops user input acting as LIKE wildcards.
 func escapeLike(s string) string {
 	s = strings.ReplaceAll(s, `\`, `\\`)
 	s = strings.ReplaceAll(s, "%", `\%`)
@@ -156,8 +153,7 @@ func (s *Server) listPackages(ctx context.Context, f PackageFilter) ([]Package, 
 	var conds []string
 	var args []any
 
-	// add appends one arg and its condition, formatting the placeholder to the
-	// arg's position. Values only ever reach the query as parameters.
+	// Binds one arg and numbers its placeholder.
 	add := func(format string, arg any) {
 		args = append(args, arg)
 		conds = append(conds, fmt.Sprintf(format, len(args)))
@@ -187,6 +183,7 @@ func (s *Server) listPackages(ctx context.Context, f PackageFilter) ([]Package, 
 		statement += ` WHERE ` + strings.Join(conds, ` AND `)
 	}
 
+	// Unfiltered browsing wants newest first, a search wants by name.
 	if len(conds) == 0 {
 		statement += ` ORDER BY created_at DESC, id`
 	} else {
@@ -207,8 +204,7 @@ func (s *Server) listPackages(ctx context.Context, f PackageFilter) ([]Package, 
 		return nil, fmt.Errorf("list packages: %w", err)
 	}
 
-	// CollectRows already returns an empty slice for no rows; it never returns
-	// ErrNoRows. Dropping this error hides every failure as "no packages".
+	// Never ErrNoRows. Dropping err would hide every failure.
 	packages, err := pgx.CollectRows(rows, pgx.RowToStructByName[Package])
 	if err != nil {
 		return nil, fmt.Errorf("collect packages: %w", err)
@@ -223,8 +219,7 @@ func (s *Server) listPackages(ctx context.Context, f PackageFilter) ([]Package, 
 
 const releaseColumns = `id, package_id, url, version, description, created_at`
 
-// attachReleases fills Releases on every package in one extra query, so a page
-// of N packages costs 2 queries and not N+1. Newest release first.
+// One query for all packages, not N+1. Newest first.
 func (s *Server) attachReleases(ctx context.Context, packages []Package) error {
 	if len(packages) == 0 {
 		return nil
@@ -234,7 +229,7 @@ func (s *Server) attachReleases(ctx context.Context, packages []Package) error {
 	byPackage := make(map[uuid.UUID]*Package, len(packages))
 	for i := range packages {
 		ids[i] = packages[i].ID
-		// A package with no releases serialises as [] and not null.
+		// [] reads better than null.
 		packages[i].Releases = []Release{}
 		byPackage[packages[i].ID] = &packages[i]
 	}
@@ -262,8 +257,7 @@ func (s *Server) attachReleases(ctx context.Context, packages []Package) error {
 	return nil
 }
 
-// getPackageRow reads the packages row only. Callers that need Releases use
-// getPackage; getRelease does not, and should not pay for the extra query.
+// Skips the releases query callers may not need.
 func (s *Server) getPackageRow(ctx context.Context, name string) (*Package, error) {
 	rows, err := s.db.Query(ctx,
 		`SELECT `+packageColumns+` FROM packages WHERE name = $1`, name)
@@ -288,7 +282,7 @@ func (s *Server) getPackage(ctx context.Context, name string) (*Package, error) 
 		return nil, err
 	}
 
-	// attachReleases writes through the slice, so read the package back out of it.
+	// attachReleases writes through the slice.
 	packages := []Package{*packaged}
 	if err := s.attachReleases(ctx, packages); err != nil {
 		return nil, err
@@ -334,6 +328,7 @@ func (s *Server) publishPackage(ctx context.Context, publisher User, packaged Ne
 		return nil, fmt.Errorf("insert package: %w", err)
 	}
 
+	// A conflict returns no rows, so no rows means duplicate.
 	createdPackage, err := pgx.CollectExactlyOneRow(rows, pgx.RowToStructByName[Package])
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrPackageExists
@@ -342,14 +337,11 @@ func (s *Server) publishPackage(ctx context.Context, publisher User, packaged Ne
 		return nil, fmt.Errorf("collect package: %w", err)
 	}
 
-	createdPackage.Releases = []Release{} // a new package has none; [] reads better than null
+	createdPackage.Releases = []Release{} // [] reads better than null
 	return &createdPackage, nil
 }
 
-func (s *Server) publishRelease(ctx context.Context, publisher User, packaged Package, release *Release) (*Release, error) {
-	if release == nil {
-		return nil, errors.New("publish release: no release given")
-	}
+func (s *Server) publishRelease(ctx context.Context, publisher User, packaged Package, release NewRelease) (*Release, error) {
 	if packaged.PublisherID != publisher.ID {
 		return nil, ErrNotPublisher
 	}
