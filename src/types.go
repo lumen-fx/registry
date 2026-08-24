@@ -1,8 +1,5 @@
 package src
 
-// Domain types and request/response payloads. `db` tags feed
-// pgx.RowToStructByName; `json` tags define the wire format.
-
 import (
 	"time"
 
@@ -17,8 +14,7 @@ type HealthCheck struct {
 
 type ErrorResponse struct {
 	Error string `json:"error"`
-	// Fields carries per-field validation messages, so a client can fix a
-	// whole form from one response instead of one field per round trip.
+	// Lets a client fix a whole form at once.
 	Fields map[string]string `json:"fields,omitempty"`
 }
 
@@ -35,8 +31,7 @@ type User struct {
 	Packages     []Package `json:"packages" db:"-"`
 }
 
-// PublicUser is the User fields safe to show to anyone. Register and login
-// still return the full User: that is the caller's own record.
+// PublicUser hides fields only the owner may see.
 type PublicUser struct {
 	ID        uuid.UUID `json:"id"`
 	Username  string    `json:"username"`
@@ -74,15 +69,14 @@ type Release struct {
 	CreatedAt   time.Time `json:"createdAt" db:"created_at"`
 }
 
-// PackageFilter selects packages. Zero fields mean no filter; set fields are
-// combined with AND.
+// PackageFilter combines set fields with AND.
 type PackageFilter struct {
 	Platform string // exact match
 	Name     string // case-insensitive substring of name
 	Search   string // case-insensitive substring of name or description
 	Username string // publisher's username
 	Version  string // has a release with this version
-	Limit    int    // clamped to packagesMaxLimit; <=0 means the default
+	Limit    int    // clamped to packagesMaxLimit, <=0 means default
 }
 
 type Package struct {
@@ -99,5 +93,12 @@ type Package struct {
 type NewPackage struct {
 	Platform    string `json:"platform" db:"platform"`
 	Name        string `json:"name" db:"name"`
+	Description string `json:"description" db:"description"`
+}
+
+// Package comes from the path, publisher from credentials.
+type NewRelease struct {
+	URL         string `json:"url" db:"url"`
+	Version     string `json:"version" db:"version"`
 	Description string `json:"description" db:"description"`
 }
