@@ -19,16 +19,14 @@ func writeJSON(w http.ResponseWriter, r *http.Request, status int, v any) {
 	body, err := json.Marshal(v)
 	if err != nil {
 		log.Error("encode response", slog.Any("error", err))
-		// Written literally rather than through writeError: re-entering the
-		// marshaller after it has already failed risks failing again.
+		// Marshalling already failed. Do not re-enter it.
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.WriteHeader(http.StatusInternalServerError)
 		_, _ = w.Write([]byte(`{"error":"internal server error"}`))
 		return
 	}
 
-	// 204 and 304 must not carry a body. net/http discards one and logs a
-	// complaint, so the caller's payload would vanish silently.
+	// 204 and 304 must not carry a body.
 	if status == http.StatusNoContent || status == http.StatusNotModified {
 		w.WriteHeader(status)
 		return
@@ -37,7 +35,7 @@ func writeJSON(w http.ResponseWriter, r *http.Request, status int, v any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
 	if _, err := w.Write(body); err != nil {
-		// Client hung up mid-write. Nothing to salvage, but worth knowing.
+		// Client hung up mid-write.
 		log.Warn("write response", slog.Any("error", err))
 	}
 }
@@ -111,6 +109,7 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
 		return false
 	}
 
+	// A second decode catches anything after the first object.
 	if err := dec.Decode(new(json.RawMessage)); !errors.Is(err, io.EOF) {
 		writeError(w, r, http.StatusBadRequest, "request body must contain a single JSON object")
 		return false

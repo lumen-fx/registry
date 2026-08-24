@@ -13,8 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// lazyPool builds a pool that never dials. pgxpool.NewWithConfig defers the
-// first connection, so this is enough for anything that only reads Config().
+// lazyPool never dials. The first connection is deferred.
 func lazyPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 
@@ -42,8 +41,7 @@ func TestNewHTTPServer(t *testing.T) {
 	if srv.ReadTimeout != 10*time.Second {
 		t.Errorf("ReadTimeout = %v, want 10s", srv.ReadTimeout)
 	}
-	// WriteTimeout must exceed the per-request timeout or a timed-out handler
-	// loses the connection before it can write its error.
+	// WriteTimeout must exceed the per-request timeout.
 	if srv.WriteTimeout <= requestTimeout {
 		t.Errorf("WriteTimeout %v must exceed requestTimeout %v", srv.WriteTimeout, requestTimeout)
 	}
@@ -54,8 +52,7 @@ func TestNewHTTPServer(t *testing.T) {
 		t.Fatal("Handler is nil")
 	}
 
-	// The stack is wired, not just present: an unrouted path comes back as the
-	// API's JSON 404 rather than net/http's plain-text one.
+	// Wired, not just present. An unrouted path returns JSON.
 	rec := httptest.NewRecorder()
 	srv.Handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/nope", nil))
 
@@ -86,15 +83,14 @@ func TestServeShutsDownOnContextCancel(t *testing.T) {
 }
 
 func TestServeReturnsListenError(t *testing.T) {
-	// Hold a port so ListenAndServe cannot bind it.
+	// Hold the port so ListenAndServe cannot bind.
 	held, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
 	defer held.Close()
 
-	// No cancel: the listen failure alone must end Serve, otherwise it would
-	// block until a signal that never comes.
+	// The listen failure alone must end Serve.
 	err = Serve(context.Background(), discardLogger(), lazyPool(t), held.Addr().String())
 
 	if err == nil {
