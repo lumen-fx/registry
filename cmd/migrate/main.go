@@ -3,32 +3,13 @@
 package main
 
 import (
-	"log/slog"
+	"fmt"
 	"os"
-
-	"lpm-server/src"
-
-	"github.com/joho/godotenv"
 )
 
 func main() {
-	logger := src.ConfigLogging()
-
-	if err := run(logger); err != nil {
-		logger.Error("migrate", slog.Any("error", err))
+	if err := run(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-}
-
-// Holds the work so main can os.Exit.
-func run(logger *slog.Logger) error {
-	// A missing .env is normal outside local dev.
-	_ = godotenv.Load()
-
-	if err := src.RunMigrations(os.Getenv("DATABASE_URL")); err != nil {
-		return err
-	}
-
-	logger.Info("migrations applied")
-	return nil
 }

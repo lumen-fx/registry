@@ -21,7 +21,6 @@ var version = "dev"
 
 func main() {
 	logger := src.ConfigLogging()
-	logger = logger.With(slog.String("version", version))
 
 	// A missing .env is normal. Bad syntax is fatal.
 	if err := godotenv.Load(); err != nil && !errors.Is(err, fs.ErrNotExist) {
@@ -37,6 +36,8 @@ func main() {
 
 // Holds deferred cleanup so main can os.Exit.
 func run(logger *slog.Logger) error {
+	logger = logger.With(slog.String("version", version))
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
