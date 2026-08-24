@@ -1,0 +1,67 @@
+# Runs the migrator to completion before the deployment rolls out. The name
+# carries the image tag, so each release gets its own Job and a rerun of an
+# applied migration is a no-op rather than an error.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: lpm-migrate
+  namespace: lpm
+spec:
+  backoffLimit: 3
+  # Kept briefly so a failed rollout still has logs to read.
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: lpm-server
+        app.kubernetes.io/component: migrate
+    spec:
+      restartPolicy: Never
+      # The Job may be created before Postgres accepts connections. Waiting
+      # here costs one pod restart instead of burning the backoff limit.
+      initContainers:
+        - name: wait-for-postgres
+          image: postgres:18
+          command:
+            - sh
+            - -c
+            # -U is required: this runs as a uid with no passwd entry, so
+            # libpq cannot guess a user and pg_isready never connects.
+            - until pg_isready -h postgres -p 5432 -U lpm; do sleep 2; done
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 25m
+              memory: 32Mi
+            limits:
+              memory: 64Mi
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: migrate
+          image: ghcr.io/lumen-fx/registry:latest
+          command: ["/migrate"]
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: lpm-postgres
+                  key: DATABASE_URL
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
