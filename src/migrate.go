@@ -3,6 +3,7 @@ package src
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"strings"
 
 	"lpm-server/migrations"
@@ -15,11 +16,16 @@ import (
 // RunMigrations brings the database up to the newest embedded migration. It is
 // safe to call on a database that is already current.
 func RunMigrations(dsn string) error {
+	return runMigrations(migrations.FS, dsn)
+}
+
+// runMigrations takes the filesystem so a test can hand it a broken one.
+func runMigrations(fsys fs.FS, dsn string) error {
 	if dsn == "" {
 		return errors.New("migrate: no database url")
 	}
 
-	source, err := iofs.New(migrations.FS, ".")
+	source, err := iofs.New(fsys, ".")
 	if err != nil {
 		return fmt.Errorf("migrate: read migrations: %w", err)
 	}

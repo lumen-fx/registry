@@ -2,13 +2,16 @@ package src
 
 import (
 	"context"
+	"io/fs"
 	"os"
+	"strings"
 	"testing"
 
 	"lpm-server/migrations"
 
 	"github.com/golang-migrate/migrate/v4"
 	"github.com/golang-migrate/migrate/v4/source/iofs"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func TestMigrateURLPicksThePgxDriver(t *testing.T) {
@@ -20,6 +23,22 @@ func TestMigrateURLPicksThePgxDriver(t *testing.T) {
 		if got := migrateURL(c.in); got != c.want {
 			t.Errorf("migrateURL(%q) = %q, want %q", c.in, got, c.want)
 		}
+	}
+}
+
+// brokenFS fails every read, which is what an unreadable migration directory
+// looks like from inside iofs.
+type brokenFS struct{}
+
+func (brokenFS) Open(string) (fs.File, error) { return nil, fs.ErrPermission }
+
+func TestRunMigrationsReportsAnUnreadableFilesystem(t *testing.T) {
+	err := runMigrations(brokenFS{}, "postgres://u:p@127.0.0.1:1/db")
+	if err == nil {
+		t.Fatal("runMigrations accepted an unreadable filesystem")
+	}
+	if !strings.Contains(err.Error(), "read migrations") {
+		t.Errorf("error = %v, want it to name the read failure", err)
 	}
 }
 
@@ -101,4 +120,57 @@ func tableExists(t *testing.T, name string) bool {
 	}
 
 	return exists
+}
+
+// TestRunMigrationsReportsADirtyDatabase covers the failure path. A dirty
+// version is how migrate records a migration that died halfway.
+func TestRunMigrationsReportsADirtyDatabase(t *testing.T) {
+	dsn := os.Getenv("TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("TEST_DATABASE_URL is not set")
+	}
+
+	ctx := context.Background()
+	const name = "lpm_dirty_test"
+
+	// Its own database, so the suite's schema is left alone.
+	if _, err := testPool.Exec(ctx, `DROP DATABASE IF EXISTS `+name); err != nil {
+		t.Fatalf("drop database: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `CREATE DATABASE `+name); err != nil {
+		t.Fatalf("create database: %v", err)
+	}
+	t.Cleanup(func() {
+		if _, err := testPool.Exec(ctx, `DROP DATABASE IF EXISTS `+name); err != nil {
+			t.Errorf("drop database: %v", err)
+		}
+	})
+
+	scratch := swapDatabase(dsn, name)
+	if err := RunMigrations(scratch); err != nil {
+		t.Fatalf("first migration: %v", err)
+	}
+
+	pool, err := pgxpool.New(ctx, scratch)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE schema_migrations SET dirty = true`); err != nil {
+		t.Fatalf("dirty the version: %v", err)
+	}
+	pool.Close()
+
+	if err := RunMigrations(scratch); err == nil {
+		t.Error("RunMigrations returned nil against a dirty database")
+	}
+}
+
+// swapDatabase points a connection string at a different database name.
+func swapDatabase(dsn, name string) string {
+	base, _, found := strings.Cut(dsn, "?")
+	query := ""
+	if found {
+		query = dsn[len(base):]
+	}
+	return base[:strings.LastIndex(base, "/")] + "/" + name + query
 }
