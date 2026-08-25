@@ -14,9 +14,11 @@ resources:
   - ingress.yaml
   - poddisruptionbudget.yaml
 
+# release.yml pushes this tag on every push to main. Pin a sha- tag for a
+# deploy you want to be able to identify later.
 images:
   - name: ghcr.io/lumen-fx/registry
-    newTag: latest
+    newTag: main
 
 labels:
   - includeSelectors: false

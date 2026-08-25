@@ -47,6 +47,8 @@ spec:
       containers:
         - name: migrate
           image: ghcr.io/lumen-fx/registry:latest
+          # The tag moves, and Kubernetes only defaults to Always for :latest.
+          imagePullPolicy: Always
           command: ["/migrate"]
           env:
             - name: DATABASE_URL

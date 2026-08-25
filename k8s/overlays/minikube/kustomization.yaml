@@ -1,0 +1,25 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Local cluster. The image is built straight into minikube's daemon, so there
+# is nothing to pull and no registry involved:
+#
+#   minikube image build -t lpm-server:dev .
+#   kubectl apply -k k8s/overlays/minikube
+resources:
+  - ../../base
+
+images:
+  - name: ghcr.io/lumen-fx/registry
+    newName: lpm-server
+    newTag: dev
+
+patches:
+  - path: pull-policy.yaml
+    target:
+      kind: Deployment
+      name: lpm-server
+  - path: pull-policy.yaml
+    target:
+      kind: Job
+      name: lpm-migrate

@@ -1,0 +1,4 @@
+# Never pull: the image only exists inside the cluster's daemon.
+- op: replace
+  path: /spec/template/spec/containers/0/imagePullPolicy
+  value: IfNotPresent
