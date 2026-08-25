@@ -48,7 +48,8 @@ main.go            process lifecycle
 cmd/migrate/       standalone migrator, run as a Kubernetes Job
 migrations/        the schema, embedded in both binaries
 src/               server, handlers, store, validation, middleware
-k8s/               manifests, including Postgres
+k8s/base/          manifests, including Postgres
+k8s/overlays/      per-cluster changes
 scripts/           schema dump helper
 ```
 
@@ -75,7 +76,7 @@ listens on `:8080`.
 | `TEST_DATABASE_URL` | none | Database for the end-to-end tests. |
 
 Leave `MIGRATE_ON_BOOT` off in a cluster. Every replica would migrate at once
-during a rollout; the Job in `k8s/` owns the schema instead.
+during a rollout; the Job in `k8s/base` owns the schema instead.
 
 ## Migrations
 
@@ -125,18 +126,43 @@ at 80 percent of changed lines.
 ## Deploying
 
 The image carries both binaries, so a rollout and its migration Job always run
-the same code.
+the same code. `release.yml` builds and pushes it to GHCR on every push to
+`main` and on `v*` tags, tagged `sha-<commit>`, `main`, and the version. Nothing
+needs building by hand.
 
-```sh
-docker build -t ghcr.io/lumen-fx/registry:$(git rev-parse --short HEAD) .
-docker push ghcr.io/lumen-fx/registry:$(git rev-parse --short HEAD)
-```
-
-`k8s/` runs Postgres in the cluster as a StatefulSet with a 10Gi volume, one
+`k8s/base` runs Postgres in the cluster as a StatefulSet with a 10Gi volume, one
 replica, no replication or failover. One command does the whole thing:
 
 ```sh
-kubectl apply -k k8s/
+kubectl apply -k k8s/base
+```
+
+The base tracks `ghcr.io/lumen-fx/registry:main` with `imagePullPolicy: Always`,
+which is fine for a staging cluster and wrong for anything you need to identify
+later. Pin the commit instead:
+
+```sh
+cd k8s/base
+kustomize edit set image ghcr.io/lumen-fx/registry:sha-1a2b3c4
+```
+
+### Locally
+
+`k8s/overlays/minikube` builds the image straight into the cluster's own daemon,
+so no registry is involved:
+
+```sh
+minikube start
+minikube image build -t lpm-server:dev .
+kubectl apply -k k8s/overlays/minikube
+```
+
+minikube needs `br_netfilter` loaded on the host, otherwise bridged pod traffic
+skips iptables, kube-proxy's ClusterIP rules never apply, and nothing resolves
+DNS:
+
+```sh
+sudo modprobe br_netfilter
 ```
 
 No secret to create and no password to choose. A bootstrap Job generates a
@@ -154,13 +180,15 @@ in its volume, so also reset the role:
 ```sh
 kubectl -n lpm delete secret lpm-postgres
 kubectl -n lpm delete job lpm-bootstrap-secret
-kubectl apply -k k8s/
+kubectl apply -k k8s/base
 kubectl -n lpm exec statefulset/postgres -- \
   psql -U lpm -d lpm -c "ALTER ROLE lpm PASSWORD '<the new one>'"
 kubectl -n lpm rollout restart deployment/lpm-server
 ```
 
 What the manifests do:
+
+All paths below are under `k8s/base`.
 
 - **bootstrap-secret.yaml** — generates the password, plus the ServiceAccount
   and Role that let it create exactly one Secret in this namespace.
