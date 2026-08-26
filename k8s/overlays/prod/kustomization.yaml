@@ -2,11 +2,14 @@ apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
 # The production cluster. Traffic arrives through a Cloudflare tunnel instead
-# of an Ingress, and a daily CronJob picks up new images from GHCR. The tunnel
-# token is not committed; create it once before applying:
+# of an Ingress, and a daily CronJob picks up new images from GHCR. Neither
+# secret is committed; create both once before applying:
 #
 #   kubectl -n lpm create secret generic cloudflare-tunnel \
 #     --from-literal=token=<tunnel token>
+#   kubectl -n lpm create secret generic lpm-github-oauth \
+#     --from-literal=GITHUB_CLIENT_ID=<id> \
+#     --from-literal=GITHUB_CLIENT_SECRET=<secret>
 #   kubectl apply -k k8s/overlays/prod
 
 resources:
@@ -24,3 +27,15 @@ patches:
       metadata:
         name: lpm-server
         namespace: lpm
+  # GitHub sign-in credentials. Optional so the cluster still serves the
+  # read-only API before the secret exists; sign-in answers 503 until then.
+  - patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/envFrom/-
+        value:
+          secretRef:
+            name: lpm-github-oauth
+            optional: true
+    target:
+      kind: Deployment
+      name: lpm-server

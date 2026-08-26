@@ -29,8 +29,6 @@ func TestDatabaseFailuresAnswer500(t *testing.T) {
 	server := NewServer(deadPool(t))
 	handler := Chain(server.Routes(), RequestLogger(discardLogger()), Recoverer(), Timeout(requestTimeout))
 
-	const credentials = "alice:correct-horse-battery"
-
 	for _, c := range []struct {
 		method, path, body string
 		auth               bool
@@ -43,9 +41,8 @@ func TestDatabaseFailuresAnswer500(t *testing.T) {
 		{http.MethodGet, "/packages/alice-tool", "", false, http.StatusInternalServerError},
 		{http.MethodGet, "/packages/alice-tool/releases", "", false, http.StatusInternalServerError},
 		{http.MethodGet, "/packages/alice-tool/releases/1.0.0", "", false, http.StatusInternalServerError},
-		{http.MethodPost, "/user/register", `{"username":"alice","email":"a@example.test","password":"correct-horse-battery"}`, false, http.StatusInternalServerError},
-		{http.MethodPost, "/user/login", `{"username":"alice","password":"correct-horse-battery"}`, false, http.StatusInternalServerError},
-		{http.MethodPost, "/user/change_password", `{"username":"alice","currentPassword":"correct-horse-battery","newPassword":"another-good-one"}`, false, http.StatusInternalServerError},
+		{http.MethodGet, "/auth/me", "", true, http.StatusInternalServerError},
+		{http.MethodPost, "/auth/logout", "", true, http.StatusInternalServerError},
 		{http.MethodPost, "/packages", `{"platform":"linux","name":"alice-tool"}`, true, http.StatusInternalServerError},
 		{http.MethodPost, "/packages/alice-tool/releases", `{"url":"https://example.test/x.tgz","version":"1.0.0"}`, true, http.StatusInternalServerError},
 	} {
@@ -58,8 +55,8 @@ func TestDatabaseFailuresAnswer500(t *testing.T) {
 
 		req := httptest.NewRequest(c.method, c.path, body)
 		if c.auth {
-			user, password, _ := strings.Cut(credentials, ":")
-			req.SetBasicAuth(user, password)
+			req.Header.Set("Authorization", "Bearer lpm_deadbeef")
+			req.AddCookie(&http.Cookie{Name: sessionCookie, Value: "deadbeef"})
 		}
 
 		rec := httptest.NewRecorder()
@@ -94,18 +91,30 @@ func TestStoreFailuresAreWrapped(t *testing.T) {
 		}{name, err})
 	}
 
-	_, err := s.createUser(ctx, UserRegister{Username: "alice", Email: "a@example.test", Password: "correct-horse-battery"})
-	add("createUser", err)
+	_, err := s.upsertGitHubUser(ctx, 1, "alice")
+	add("upsertGitHubUser", err)
 
 	_, err = s.getUser(ctx, "alice")
 	add("getUser", err)
 
-	_, err = s.verifyLogin(ctx, UserLogin{Username: "alice", Password: "correct-horse-battery"})
-	add("verifyLogin", err)
+	_, err = s.createSession(ctx, publisher.ID)
+	add("createSession", err)
 
-	add("changePassword", s.changePassword(ctx, UserResetPassword{
-		Username: "alice", CurrentPassword: "correct-horse-battery", NewPassword: "another-good-one",
-	}))
+	_, err = s.sessionUser(ctx, "deadbeef")
+	add("sessionUser", err)
+
+	add("deleteSession", s.deleteSession(ctx, "deadbeef"))
+
+	_, err = s.createToken(ctx, publisher.ID, "ci")
+	add("createToken", err)
+
+	_, err = s.listTokens(ctx, publisher.ID)
+	add("listTokens", err)
+
+	add("revokeToken", s.revokeToken(ctx, publisher.ID, publisher.ID))
+
+	_, err = s.tokenUser(ctx, "lpm_deadbeef")
+	add("tokenUser", err)
 
 	_, err = s.listPackages(ctx, PackageFilter{})
 	add("listPackages", err)
@@ -134,6 +143,12 @@ func TestStoreFailuresAreWrapped(t *testing.T) {
 	}
 	if _, err := s.getPackage(ctx, "alice-tool"); errors.Is(err, ErrPackageNotFound) {
 		t.Error("a query failure was reported as ErrPackageNotFound")
+	}
+	if _, err := s.sessionUser(ctx, "deadbeef"); errors.Is(err, ErrInvalidCredentials) {
+		t.Error("a query failure was reported as ErrInvalidCredentials")
+	}
+	if _, err := s.tokenUser(ctx, "lpm_deadbeef"); errors.Is(err, ErrInvalidCredentials) {
+		t.Error("a query failure was reported as ErrInvalidCredentials")
 	}
 }
 
@@ -347,25 +362,12 @@ func TestRequestIDPrefersTheHeader(t *testing.T) {
 func TestValidationLengthLimits(t *testing.T) {
 	long := func(n int) string { return strings.Repeat("a", n) }
 
-	register := UserRegister{
-		Username: long(usernameMaxLen + 1),
-		Email:    long(emailMaxLen) + "@example.test",
-		Password: long(passwordMaxLen + 1),
+	token := NewToken{Name: long(tokenNameMaxLen + 1)}
+	if _, ok := token.Validate()["name"]; !ok {
+		t.Error("NewToken.Validate did not reject a long name")
 	}
-	for _, field := range []string{"username", "email", "password"} {
-		if _, ok := register.Validate()[field]; !ok {
-			t.Errorf("UserRegister.Validate did not reject a long %s", field)
-		}
-	}
-
-	login := UserLogin{Username: long(usernameMaxLen + 1), Password: long(passwordMaxLen + 1)}
-	if fields := login.Validate(); len(fields) != 2 {
-		t.Errorf("UserLogin.Validate = %v, want both fields rejected", fields)
-	}
-
-	reset := UserResetPassword{Username: "alice", CurrentPassword: "current", NewPassword: ""}
-	if _, ok := reset.Validate()["newPassword"]; !ok {
-		t.Error("UserResetPassword.Validate did not reject an empty new password")
+	if _, ok := (&NewToken{Name: "  "}).Validate()["name"]; !ok {
+		t.Error("NewToken.Validate did not reject a blank name")
 	}
 
 	pkg := NewPackage{

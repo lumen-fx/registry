@@ -21,7 +21,7 @@ and using `lpm`.
 `release.yml` builds the server image and pushes it to GHCR on every push to
 `main` and on `v*` tags, tagged `sha-<commit>`, `main`, and the version.
 `cli-release.yml` cuts cross-compiled `lpm` binaries from the same `v*` tag as
-a GitHub release. `curl -fsSL https://registry.lumenfx.dev/install.sh | sh`
+a GitHub release. `curl -fsSL https://reg.lumenfx.dev/install.sh | sh`
 installs the newest one. One tag releases everything.
 
 ## Deploying
@@ -54,13 +54,18 @@ in production within a day of landing; when nothing new was pushed, the cycle
 is a no-op.
 
 The tunnel is token-managed, so its public hostname and the route to the
-`lpm-server` Service are configured in the Cloudflare dashboard. The token is
-never committed; create it once, then apply:
+`lpm-server` Service are configured in the Cloudflare dashboard. GitHub
+sign-in needs an OAuth app whose callback is
+`https://<host>/auth/github/callback`. Neither credential is committed;
+create both once, then apply:
 
 ```sh
 kubectl create namespace lpm
 kubectl -n lpm create secret generic cloudflare-tunnel \
   --from-literal=token=<tunnel token>
+kubectl -n lpm create secret generic lpm-github-oauth \
+  --from-literal=GITHUB_CLIENT_ID=<id> \
+  --from-literal=GITHUB_CLIENT_SECRET=<secret>
 kubectl apply -k k8s/overlays/prod
 ```
 

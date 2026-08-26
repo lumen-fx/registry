@@ -66,85 +66,6 @@ func (s *Server) GetUserHandler(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, r, http.StatusOK, user.Public())
 }
 
-func (s *Server) UserRegisterHandler(w http.ResponseWriter, r *http.Request) {
-	var newUser UserRegister
-	if !decodeJSON(w, r, &newUser) {
-		return
-	}
-	if fields := newUser.Validate(); !fields.ok() {
-		writeFieldErrors(w, r, fields)
-		return
-	}
-
-	user, err := s.createUser(r.Context(), newUser)
-	switch {
-	case errors.Is(err, ErrUserExists):
-		writeError(w, r, http.StatusConflict, "username or email is already taken")
-		return
-	case err != nil:
-		writeServerError(w, r, "create user", err)
-		return
-	}
-
-	writeJSON(w, r, http.StatusCreated, user)
-}
-
-func (s *Server) UserLoginHandler(w http.ResponseWriter, r *http.Request) {
-	var loginUser UserLogin
-	if !decodeJSON(w, r, &loginUser) {
-		return
-	}
-	if fields := loginUser.Validate(); !fields.ok() {
-		writeFieldErrors(w, r, fields)
-		return
-	}
-
-	authed, err := s.verifyLogin(r.Context(), loginUser)
-	switch {
-	case errors.Is(err, ErrInvalidCredentials):
-		writeError(w, r, http.StatusUnauthorized, "invalid username or password")
-		return
-	case err != nil:
-		writeServerError(w, r, "verify login", err)
-		return
-	}
-
-	// Load the profile after auth so timing leaks nothing.
-	user, err := s.getUser(r.Context(), authed.Username)
-	if err != nil {
-		writeServerError(w, r, "get user", err)
-		return
-	}
-
-	writeJSON(w, r, http.StatusOK, user)
-}
-
-func (s *Server) UserChangePasswordHandler(w http.ResponseWriter, r *http.Request) {
-	var resetUser UserResetPassword
-	if !decodeJSON(w, r, &resetUser) {
-		return
-	}
-	if fields := resetUser.Validate(); !fields.ok() {
-		writeFieldErrors(w, r, fields)
-		return
-	}
-
-	err := s.changePassword(r.Context(), resetUser)
-	switch {
-	case errors.Is(err, ErrInvalidCredentials):
-		writeError(w, r, http.StatusUnauthorized, "invalid username or password")
-		return
-	case errors.Is(err, ErrUserNotFound):
-		writeError(w, r, http.StatusNotFound, "username doesn't exist")
-		return
-	case err != nil:
-		writeServerError(w, r, "change password", err)
-		return
-	}
-
-	writeJSON(w, r, http.StatusOK, StatusResponse{Status: "password was changed"})
-}
-
 func (s *Server) UserPackagesHandler(w http.ResponseWriter, r *http.Request) {
 	user, err := s.getUser(r.Context(), r.PathValue("username"))
 	switch {
@@ -244,35 +165,8 @@ func (s *Server) GetPackageHandler(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, r, http.StatusOK, packaged)
 }
 
-// Writes the 401 itself. Callers only check ok.
-func (s *Server) basicAuth(w http.ResponseWriter, r *http.Request) (*User, bool) {
-	// RFC 9110 requires a challenge on every 401.
-	unauthorized := func() {
-		w.Header().Set("WWW-Authenticate", `Basic realm="`+serviceName+`", charset="UTF-8"`)
-		writeError(w, r, http.StatusUnauthorized, "valid credentials are required")
-	}
-
-	username, password, ok := r.BasicAuth()
-	if !ok {
-		unauthorized()
-		return nil, false
-	}
-
-	user, err := s.verifyLogin(r.Context(), UserLogin{Username: username, Password: password})
-	switch {
-	case errors.Is(err, ErrInvalidCredentials):
-		unauthorized()
-		return nil, false
-	case err != nil:
-		writeServerError(w, r, "verify login", err)
-		return nil, false
-	}
-
-	return user, true
-}
-
 func (s *Server) PublishPackageHandler(w http.ResponseWriter, r *http.Request) {
-	user, ok := s.basicAuth(w, r)
+	user, ok := s.bearerAuth(w, r)
 	if !ok {
 		return
 	}
@@ -300,7 +194,7 @@ func (s *Server) PublishPackageHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) PublishReleaseHandler(w http.ResponseWriter, r *http.Request) {
-	user, ok := s.basicAuth(w, r)
+	user, ok := s.bearerAuth(w, r)
 	if !ok {
 		return
 	}

@@ -2,7 +2,6 @@ package src
 
 import (
 	"fmt"
-	"net/mail"
 	"net/url"
 	"regexp"
 	"strings"
@@ -10,11 +9,9 @@ import (
 )
 
 const (
-	usernameMinLen = 3
-	usernameMaxLen = 39
-	emailMaxLen    = 254 // RFC 5321 forward-path limit
-	passwordMinLen = 8
-	passwordMaxLen = 1024
+	usernameMaxLen = 39 // GitHub's own login limit
+
+	tokenNameMaxLen = 100
 
 	filterValueMaxLen = 200
 
@@ -43,97 +40,16 @@ func (fe FieldErrors) add(field, msg string) {
 
 func (fe FieldErrors) ok() bool { return len(fe) == 0 }
 
-func checkUsername(fe FieldErrors, username string) {
-	switch n := utf8.RuneCountInString(username); {
-	case username == "":
-		fe.add("username", "is required")
-	case n < usernameMinLen:
-		fe.add("username", fmt.Sprintf("must be at least %d characters", usernameMinLen))
-	case n > usernameMaxLen:
-		fe.add("username", fmt.Sprintf("must be at most %d characters", usernameMaxLen))
-	case !usernamePattern.MatchString(username):
-		fe.add("username", "may contain only letters, digits, '-' and '_', and must start and end with a letter or digit")
-	}
-}
-
-func checkEmail(fe FieldErrors, email string) {
-	if email == "" {
-		fe.add("email", "is required")
-		return
-	}
-	if len(email) > emailMaxLen {
-		fe.add("email", fmt.Sprintf("must be at most %d characters", emailMaxLen))
-		return
-	}
-
-	// ParseAddress accepts "Name <a@b>", so compare it back.
-	addr, err := mail.ParseAddress(email)
-	if err != nil || addr.Address != email {
-		fe.add("email", "must be a valid email address")
-		return
-	}
-
-	_, domain, _ := strings.Cut(email, "@")
-	if !strings.Contains(domain, ".") || strings.HasPrefix(domain, ".") || strings.HasSuffix(domain, ".") {
-		fe.add("email", "must have a valid domain")
-	}
-}
-
-func checkPassword(fe FieldErrors, field, password string) {
-	switch n := len(password); {
-	case n == 0:
-		fe.add(field, "is required")
-	case n < passwordMinLen:
-		fe.add(field, fmt.Sprintf("must be at least %d characters", passwordMinLen))
-	case n > passwordMaxLen:
-		fe.add(field, fmt.Sprintf("must be at most %d bytes", passwordMaxLen))
-	}
-}
-
-func (u *UserRegister) Validate() FieldErrors {
-	u.Username = strings.TrimSpace(u.Username)
-	u.Email = strings.TrimSpace(u.Email)
+// Token names label a credential in a list, nothing more.
+func (t *NewToken) Validate() FieldErrors {
+	t.Name = strings.TrimSpace(t.Name)
 
 	fe := FieldErrors{}
-	checkUsername(fe, u.Username)
-	checkEmail(fe, u.Email)
-	checkPassword(fe, "password", u.Password)
-	return fe
-}
-
-func (u *UserLogin) Validate() FieldErrors {
-	u.Username = strings.TrimSpace(u.Username)
-
-	fe := FieldErrors{}
-	switch {
-	case u.Username == "":
-		fe.add("username", "is required")
-	case utf8.RuneCountInString(u.Username) > usernameMaxLen:
-		fe.add("username", fmt.Sprintf("must be at most %d characters", usernameMaxLen))
-	}
-	switch {
-	case u.Password == "":
-		fe.add("password", "is required")
-	case len(u.Password) > passwordMaxLen:
-		fe.add("password", fmt.Sprintf("must be at most %d bytes", passwordMaxLen))
-	}
-	return fe
-}
-
-func (u *UserResetPassword) Validate() FieldErrors {
-	u.Username = strings.TrimSpace(u.Username)
-
-	fe := FieldErrors{}
-	if u.Username == "" {
-		fe.add("username", "is required")
-	}
-	if u.CurrentPassword == "" {
-		fe.add("currentPassword", "is required")
-	}
-	checkPassword(fe, "newPassword", u.NewPassword)
-
-	if fe.ok() && u.NewPassword == u.CurrentPassword {
-		fe.add("newPassword", "must differ from the current password")
+	switch n := utf8.RuneCountInString(t.Name); {
+	case t.Name == "":
+		fe.add("name", "is required")
+	case n > tokenNameMaxLen:
+		fe.add("name", fmt.Sprintf("must be at most %d characters", tokenNameMaxLen))
 	}
 	return fe
 }

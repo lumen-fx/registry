@@ -6,43 +6,36 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/alexedwards/argon2id"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 )
 
-const userColumns = `id, username, email, password_hash, created_at`
+const userColumns = `id, username, github_id, created_at`
 
 var ErrUserExists = errors.New("user already exists")
 var ErrUserNotFound = errors.New("user not found")
 var ErrInvalidCredentials = errors.New("invalid credentials")
+var ErrTokenNotFound = errors.New("token not found")
 var ErrPackageNotFound = errors.New("package not found")
 var ErrReleaseNotFound = errors.New("release not found")
 var ErrPackageExists = errors.New("package already exists")
 var ErrReleaseExists = errors.New("release already exists")
 var ErrNotPublisher = errors.New("not the package publisher")
 
-func (s *Server) createUser(ctx context.Context, u UserRegister) (*User, error) {
-	hash, err := argon2id.CreateHash(u.Password, argon2id.DefaultParams)
-	if err != nil {
-		return nil, fmt.Errorf("create hash: %w", err)
-	}
-
+// upsertGitHubUser creates the account on first sign-in and follows GitHub
+// renames afterwards; github_id is the identity, username the display name.
+func (s *Server) upsertGitHubUser(ctx context.Context, githubID int64, username string) (*User, error) {
 	rows, err := s.db.Query(ctx,
-		`INSERT INTO users (email, username, password_hash)
-		 VALUES ($1, $2, $3)
-		 ON CONFLICT DO NOTHING
+		`INSERT INTO users (github_id, username)
+		 VALUES ($1, $2)
+		 ON CONFLICT (github_id) DO UPDATE SET username = EXCLUDED.username
 		 RETURNING `+userColumns,
-		u.Email, u.Username, hash)
+		githubID, username)
 	if err != nil {
-		return nil, fmt.Errorf("create user: %w", err)
+		return nil, fmt.Errorf("upsert user: %w", err)
 	}
 
-	// A conflict returns no rows, so no rows means duplicate.
 	user, err := pgx.CollectExactlyOneRow(rows, pgx.RowToStructByName[User])
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, ErrUserExists
-	}
 	if err != nil {
 		return nil, fmt.Errorf("collect user: %w", err)
 	}
@@ -50,7 +43,7 @@ func (s *Server) createUser(ctx context.Context, u UserRegister) (*User, error) 
 	return &user, nil
 }
 
-// Skips the profile queries so auth timing stays flat.
+// Skips the profile queries callers may not need.
 func (s *Server) getUserRow(ctx context.Context, username string) (*User, error) {
 	rows, err := s.db.Query(ctx,
 		`SELECT `+userColumns+` FROM users WHERE username = $1`, username)
@@ -85,54 +78,6 @@ func (s *Server) getUser(ctx context.Context, username string) (*User, error) {
 	}
 
 	return user, nil
-}
-
-// Returns the bare row. Callers load the profile.
-func (s *Server) verifyLogin(ctx context.Context, login UserLogin) (*User, error) {
-	user, err := s.getUserRow(ctx, login.Username)
-	if errors.Is(err, ErrUserNotFound) {
-		// Same argon2 cost as a real account.
-		_, _ = argon2id.CreateHash(login.Password, argon2id.DefaultParams)
-		return nil, ErrInvalidCredentials
-	}
-	if err != nil {
-		return nil, fmt.Errorf("get user: %w", err)
-	}
-
-	match, err := argon2id.ComparePasswordAndHash(login.Password, user.PasswordHash)
-	if err != nil {
-		return nil, fmt.Errorf("compare password: %w", err)
-	}
-	if !match {
-		return nil, ErrInvalidCredentials
-	}
-
-	return user, nil
-}
-
-func (s *Server) changePassword(ctx context.Context, reset UserResetPassword) error {
-	if _, err := s.verifyLogin(ctx, UserLogin{
-		Username: reset.Username,
-		Password: reset.CurrentPassword,
-	}); err != nil {
-		return err
-	}
-
-	hash, err := argon2id.CreateHash(reset.NewPassword, argon2id.DefaultParams)
-	if err != nil {
-		return fmt.Errorf("create hash: %w", err)
-	}
-
-	tag, err := s.db.Exec(ctx,
-		`UPDATE users SET password_hash = $1 WHERE username = $2`, hash, reset.Username)
-	if err != nil {
-		return fmt.Errorf("update password: %w", err)
-	}
-	if tag.RowsAffected() == 0 {
-		return ErrUserNotFound
-	}
-
-	return nil
 }
 
 const packageColumns = `id, publisher_id, platform, name, description, created_at`

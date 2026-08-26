@@ -23,12 +23,10 @@ type StatusResponse struct {
 }
 
 type User struct {
-	ID           uuid.UUID `json:"id" db:"id"`
-	Username     string    `json:"username" db:"username"`
-	Email        string    `json:"email" db:"email"`
-	PasswordHash string    `json:"-" db:"password_hash"`
-	CreatedAt    time.Time `json:"createdAt" db:"created_at"`
-	Packages     []Package `json:"packages" db:"-"`
+	ID        uuid.UUID `json:"id" db:"id"`
+	Username  string    `json:"username" db:"username"`
+	CreatedAt time.Time `json:"createdAt" db:"created_at"`
+	Packages  []Package `json:"packages" db:"-"`
 }
 
 // PublicUser hides fields only the owner may see.
@@ -41,23 +39,6 @@ type PublicUser struct {
 
 func (u *User) Public() PublicUser {
 	return PublicUser{ID: u.ID, Username: u.Username, CreatedAt: u.CreatedAt, Packages: u.Packages}
-}
-
-type UserRegister struct {
-	Username string `json:"username" db:"username"`
-	Email    string `json:"email" db:"email"`
-	Password string `json:"password" db:"password"`
-}
-
-type UserLogin struct {
-	Username string `json:"username" db:"username"`
-	Password string `json:"password" db:"password"`
-}
-
-type UserResetPassword struct {
-	Username        string `json:"username" db:"username"`
-	CurrentPassword string `json:"currentPassword"`
-	NewPassword     string `json:"newPassword"`
 }
 
 type Release struct {
