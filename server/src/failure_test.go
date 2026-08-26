@@ -43,6 +43,9 @@ func TestDatabaseFailuresAnswer500(t *testing.T) {
 		{http.MethodGet, "/packages/alice-tool/releases/1.0.0", "", false, http.StatusInternalServerError},
 		{http.MethodGet, "/auth/me", "", true, http.StatusInternalServerError},
 		{http.MethodPost, "/auth/logout", "", true, http.StatusInternalServerError},
+		{http.MethodGet, "/tokens", "", true, http.StatusInternalServerError},
+		{http.MethodPost, "/tokens", `{"name":"ci"}`, true, http.StatusInternalServerError},
+		{http.MethodDelete, "/tokens/11111111-1111-1111-1111-111111111111", "", true, http.StatusInternalServerError},
 		{http.MethodPost, "/packages", `{"platform":"linux","name":"alice-tool"}`, true, http.StatusInternalServerError},
 		{http.MethodPost, "/packages/alice-tool/releases", `{"url":"https://example.test/x.tgz","version":"1.0.0"}`, true, http.StatusInternalServerError},
 	} {
