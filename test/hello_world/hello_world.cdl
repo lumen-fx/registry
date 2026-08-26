@@ -1,0 +1,11 @@
+/// A fixture package for exercising the registry: the smallest Candela
+/// library there is. Import it and call the function:
+///
+///     import "./hello_world.cdl" as hello;
+///
+///     fn main() {
+///         hello::hello_world();
+///     }
+fn hello_world() {
+    print("Hello, world!");
+}

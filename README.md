@@ -10,6 +10,7 @@ fetch release artifacts over HTTPS.
 server/    the registry API and web UI, a single Go binary backed by Postgres
 cli/       lpm, the command-line client
 k8s/       Kubernetes manifests for the server
+test/      fixture packages for exercising the registry
 ```
 
 Each Go module has its own README: [server](server/README.md) covers the API,
