@@ -27,6 +27,9 @@ func (s *Server) Routes() *http.ServeMux {
 	mux.HandleFunc("GET /health", s.HealthCheckHandler)
 	mux.HandleFunc("/health", methodNotAllowed(http.MethodGet))
 
+	mux.HandleFunc("GET /install.sh", s.InstallScriptHandler)
+	mux.HandleFunc("/install.sh", methodNotAllowed(http.MethodGet))
+
 	mux.HandleFunc("GET /users/{username}", s.GetUserHandler)
 	mux.HandleFunc("/users/{username}", methodNotAllowed(http.MethodGet))
 

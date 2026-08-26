@@ -8,8 +8,9 @@ no runtime dependencies.
 
 | Method | Path | Auth | Notes |
 | --- | --- | --- | --- |
-| `GET` | `/` | none | Liveness. No database access. |
+| `GET` | `/` | none | The web UI. Static, no database access, doubles as liveness. |
 | `GET` | `/health` | none | Pings the pool. `503` when the database is down. |
+| `GET` | `/install.sh` | none | Installer for the `lpm` CLI. Static. |
 | `POST` | `/user/register` | none | `201`, or `409` when the username or email is taken. |
 | `POST` | `/user/login` | none | Returns the caller's own record with their packages. |
 | `POST` | `/user/change_password` | body | `401` on a wrong current password. |
@@ -48,6 +49,7 @@ main.go            process lifecycle
 cmd/migrate/       standalone migrator, run as a Kubernetes Job
 migrations/        the schema, embedded in both binaries
 src/               server, handlers, store, validation, middleware
+web/               browser UI and CLI installer, embedded in the binary
 scripts/           schema dump helper
 ```
 

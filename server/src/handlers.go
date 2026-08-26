@@ -3,19 +3,32 @@ package src
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 	"net/http"
 	"strconv"
 	"time"
+
+	"github.com/lumen-fx/registry/server/web"
 )
 
 const serviceName = "lumen-packages"
 
+// Serves the browser UI. Static and database-free, so it doubles as the
+// liveness endpoint the deployment probes.
 func (s *Server) RootHandler(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache")
 	w.WriteHeader(http.StatusOK)
-	fmt.Fprint(w, "Hello, World!")
+	w.Write(web.IndexHTML)
+}
+
+// Serves the CLI installer, so `curl registry/install.sh | sh` works with
+// nothing but the registry's own hostname.
+func (s *Server) InstallScriptHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/x-shellscript; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.WriteHeader(http.StatusOK)
+	w.Write(web.InstallScript)
 }
 
 func (s *Server) HealthCheckHandler(w http.ResponseWriter, r *http.Request) {

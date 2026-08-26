@@ -7,7 +7,7 @@ fetch release artifacts over HTTPS.
 ## Layout
 
 ```
-server/    the registry API, a single Go binary backed by Postgres
+server/    the registry API and web UI, a single Go binary backed by Postgres
 cli/       lpm, the command-line client
 k8s/       Kubernetes manifests for the server
 ```
@@ -21,7 +21,9 @@ and using `lpm`.
 `release.yml` builds the server image and pushes it to GHCR on every push to
 `main` and on `v*` tags, tagged `sha-<commit>`, `main`, and the version.
 `cli-release.yml` cuts cross-compiled `lpm` binaries from the same `v*` tag as
-a GitHub release. One tag releases both.
+a GitHub release, then publishes the release to the registry itself, which is
+what `curl -fsSL https://registry.lumenfx.dev/install.sh | sh` installs. One
+tag releases everything.
 
 ## Deploying
 
