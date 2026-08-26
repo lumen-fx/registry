@@ -21,9 +21,8 @@ and using `lpm`.
 `release.yml` builds the server image and pushes it to GHCR on every push to
 `main` and on `v*` tags, tagged `sha-<commit>`, `main`, and the version.
 `cli-release.yml` cuts cross-compiled `lpm` binaries from the same `v*` tag as
-a GitHub release, then publishes the release to the registry itself, which is
-what `curl -fsSL https://registry.lumenfx.dev/install.sh | sh` installs. One
-tag releases everything.
+a GitHub release. `curl -fsSL https://registry.lumenfx.dev/install.sh | sh`
+installs the newest one. One tag releases everything.
 
 ## Deploying
 

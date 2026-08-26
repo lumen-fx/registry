@@ -34,7 +34,7 @@ func TestInstallScriptIsServed(t *testing.T) {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
 	body := rec.Body.String()
-	if !strings.HasPrefix(body, "#!/bin/sh") || !strings.Contains(body, "/packages/lpm/releases") {
+	if !strings.HasPrefix(body, "#!/bin/sh") || !strings.Contains(body, "releases/latest") {
 		t.Errorf("body = %.80q..., want the installer script", body)
 	}
 }
