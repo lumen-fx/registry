@@ -109,3 +109,4 @@ cli/lpm
 cli/cli
 server/lpm-server
 server/server
+cli/LICENSE
