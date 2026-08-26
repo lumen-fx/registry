@@ -2,7 +2,7 @@
 # Installs the lpm CLI: asks GitHub for the newest release of the registry
 # repository, then downloads the binary for this platform from it.
 #
-#   curl -fsSL https://registry.lumenfx.dev/install.sh | sh
+#   curl -fsSL https://reg.lumenfx.dev/install.sh | sh
 #
 # LPM_INSTALL_DIR overrides the destination (default ~/.local/bin).
 set -eu

@@ -115,6 +115,33 @@ a { color: var(--flame); }
 .release .dl { margin-left: auto; font-size: .85rem; white-space: nowrap; }
 
 .state { color: var(--muted); padding: 2rem 0; }
+
+.who { margin-left: auto; font-size: .85rem; }
+button {
+  font: inherit; color: var(--ink);
+  background: var(--card);
+  border: 1px solid var(--line); border-radius: .5rem;
+  padding: .45rem .9rem; cursor: pointer;
+}
+button:hover { border-color: var(--flame); }
+button:focus-visible { outline: none; border-color: var(--flame); box-shadow: 0 0 0 4px var(--glow); }
+.mint { display: flex; gap: .5rem; margin: .5rem 0 1rem; }
+.mint input {
+  flex: 1; min-width: 0; padding: .45rem .8rem;
+  font: inherit; color: var(--ink);
+  background: var(--card);
+  border: 1px solid var(--line); border-radius: .5rem;
+}
+.mint input:focus { outline: none; border-color: var(--flame); box-shadow: 0 0 0 4px var(--glow); }
+.secret {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  background: var(--card); border: 1px solid var(--flame); border-radius: .5rem;
+  padding: .7rem .8rem; margin: .5rem 0; word-break: break-all;
+}
+.token-row { display: flex; align-items: baseline; gap: .8rem; padding: .6rem 0; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.token-row .name { font-weight: 600; }
+.token-row time, .token-row .meta { color: var(--muted); font-size: .85rem; }
+.token-row button { margin-left: auto; padding: .2rem .7rem; font-size: .85rem; }
 @media (prefers-reduced-motion: no-preference) {
   .lamp input, .lamp select { transition: box-shadow .15s ease, border-color .15s ease; }
 }
@@ -125,6 +152,7 @@ a { color: var(--flame); }
   <header>
     <a class="wordmark" href="#/">lpm<span class="dot-l"></span><span class="dot-c"></span></a>
     <span class="tagline">packages for Lumen and Candela</span>
+    <span id="who" class="who"></span>
   </header>
   <div id="view"></div>
 </main>
@@ -310,8 +338,133 @@ async function renderUser(username) {
   view.replaceChildren(frag);
 }
 
+async function whoami() {
+  const res = await fetch("/auth/me");
+  if (!res.ok) return null;
+  return res.json();
+}
+
+async function renderHeader() {
+  const who = document.getElementById("who");
+  let me = null;
+  try {
+    me = await whoami();
+  } catch {
+    // The header stays quiet when the registry is unreachable.
+  }
+  if (!me) {
+    const signIn = el("a", "", "Sign in with GitHub");
+    signIn.href = "/auth/github/login";
+    who.replaceChildren(signIn);
+    return;
+  }
+  const account = el("a", "", me.username);
+  account.href = "#/account";
+  who.replaceChildren(account);
+}
+
+async function renderAccount() {
+  let me = null;
+  try {
+    me = await whoami();
+  } catch {
+    return state("The registry did not respond. Retry in a moment.");
+  }
+  if (!me) {
+    const p = el("p", "state");
+    p.append("Sign in first: ");
+    const signIn = el("a", "", "sign in with GitHub");
+    signIn.href = "/auth/github/login";
+    p.append(signIn, document.createTextNode("."));
+    view.replaceChildren(p);
+    return;
+  }
+
+  const crumb = el("div", "crumb");
+  const back = el("a", "", "<- all packages");
+  back.href = "#/";
+  crumb.append(back);
+
+  const h = el("h1", "", me.username);
+  const signOut = el("button", "", "Sign out");
+  signOut.addEventListener("click", async () => {
+    await fetch("/auth/logout", { method: "POST" });
+    location.hash = "#/";
+    renderHeader();
+    route();
+  });
+
+  const tokensLabel = el("div", "section-label", "API tokens");
+  const hint = el("p", "byline",
+    "A token authenticates lpm on this machine: run lpm login and paste it. It is shown once, when created.");
+
+  const mint = el("div", "mint");
+  const nameInput = el("input");
+  nameInput.placeholder = "What will use this token, e.g. laptop";
+  nameInput.setAttribute("aria-label", "Token name");
+  const create = el("button", "", "Create token");
+  mint.append(nameInput, create);
+
+  const secretBox = el("div");
+  const list = el("div");
+
+  async function refresh() {
+    try {
+      const tokens = await fetchJSON("/tokens");
+      list.replaceChildren();
+      if (!tokens || !tokens.length) {
+        list.append(el("p", "state", "No tokens yet. Create one to publish from the CLI."));
+        return;
+      }
+      for (const token of tokens) {
+        const row = el("div", "token-row");
+        row.append(el("span", "name", token.name));
+        row.append(el("time", "", "created " + day(token.createdAt)));
+        row.append(el("span", "meta",
+          token.lastUsedAt ? "last used " + day(token.lastUsedAt) : "never used"));
+        const revoke = el("button", "", "Revoke");
+        revoke.addEventListener("click", async () => {
+          await fetch("/tokens/" + token.id, { method: "DELETE" });
+          refresh();
+        });
+        row.append(revoke);
+        list.append(row);
+      }
+    } catch {
+      list.replaceChildren(el("p", "state", "The registry did not respond. Retry in a moment."));
+    }
+  }
+
+  create.addEventListener("click", async () => {
+    const name = nameInput.value.trim();
+    if (!name) {
+      nameInput.focus();
+      return;
+    }
+    const res = await fetch("/tokens", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    });
+    if (!res.ok) {
+      secretBox.replaceChildren(el("p", "state", "Creating the token failed. Retry in a moment."));
+      return;
+    }
+    const created = await res.json();
+    secretBox.replaceChildren(
+      el("p", "byline", "Copy it now; it is not shown again."),
+      el("div", "secret", created.token));
+    nameInput.value = "";
+    refresh();
+  });
+
+  view.replaceChildren(crumb, h, signOut, tokensLabel, hint, mint, secretBox, list);
+  await refresh();
+}
+
 function route() {
   const hash = decodeURIComponent(location.hash);
+  if (hash === "#/account") return renderAccount();
   const pkg = hash.match(/^#\/p\/(.+)$/);
   if (pkg) return renderPackage(pkg[1]);
   const user = hash.match(/^#\/u\/(.+)$/);
@@ -320,6 +473,7 @@ function route() {
 }
 
 addEventListener("hashchange", route);
+renderHeader();
 route();
 </script>
 </body>

@@ -4,13 +4,16 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -44,9 +47,10 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
-const testPassword = "correct-horse-battery"
-
-// api is one running server plus a client for it.
+// api is one running server plus a client for it, backed by a stand-in for
+// GitHub: the token endpoint answers every code with an access token equal to
+// the code, and the user endpoint treats that token as the login. A test
+// signs in as any user by using the login as the callback code.
 type api struct {
 	t      *testing.T
 	server *Server
@@ -61,9 +65,34 @@ func newAPI(t *testing.T) *api {
 	}
 
 	if _, err := testPool.Exec(context.Background(),
-		`TRUNCATE users, packages, releases CASCADE`); err != nil {
+		`TRUNCATE users, packages, releases, sessions, tokens CASCADE`); err != nil {
 		t.Fatalf("truncate: %v", err)
 	}
+
+	github := http.NewServeMux()
+	github.HandleFunc("POST /token", func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseForm(); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"access_token":%q}`, r.FormValue("code"))
+	})
+	github.HandleFunc("GET /user", func(w http.ResponseWriter, r *http.Request) {
+		login := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+		hash := fnv.New32a()
+		hash.Write([]byte(login))
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"id":%d,"login":%q}`, hash.Sum32(), login)
+	})
+	githubServer := httptest.NewServer(github)
+	t.Cleanup(githubServer.Close)
+
+	t.Setenv("GITHUB_CLIENT_ID", "test-client")
+	t.Setenv("GITHUB_CLIENT_SECRET", "test-secret")
+	t.Setenv("GITHUB_AUTHORIZE_URL", githubServer.URL+"/authorize")
+	t.Setenv("GITHUB_TOKEN_URL", githubServer.URL+"/token")
+	t.Setenv("GITHUB_USER_URL", githubServer.URL+"/user")
 
 	server := NewServer(testPool)
 	// The same chain NewHTTPServer builds, so the middleware is under test too.
@@ -75,9 +104,10 @@ func newAPI(t *testing.T) *api {
 }
 
 type response struct {
-	status int
-	body   string
-	header http.Header
+	status  int
+	body    string
+	header  http.Header
+	cookies []*http.Cookie
 }
 
 // json decodes the response body into dst.
@@ -88,7 +118,17 @@ func (res response) json(t *testing.T, dst any) {
 	}
 }
 
-func (a *api) do(method, path, body string, as ...string) response {
+// noRedirects returns responses as they are, so the tests read Location and
+// Set-Cookie off the redirects themselves.
+var noRedirects = &http.Client{
+	CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		return http.ErrUseLastResponse
+	},
+}
+
+// do sends a request. A token authenticates it as a bearer; a session rides
+// as the cookie. Either may be empty.
+func (a *api) do(method, path, body, token, session string) response {
 	a.t.Helper()
 
 	var reader io.Reader
@@ -99,11 +139,14 @@ func (a *api) do(method, path, body string, as ...string) response {
 	if err != nil {
 		a.t.Fatalf("new request: %v", err)
 	}
-	if len(as) > 0 {
-		req.SetBasicAuth(as[0], testPassword)
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	if session != "" {
+		req.AddCookie(&http.Cookie{Name: sessionCookie, Value: session})
 	}
 
-	res, err := http.DefaultClient.Do(req)
+	res, err := noRedirects.Do(req)
 	if err != nil {
 		a.t.Fatalf("%s %s: %v", method, path, err)
 	}
@@ -114,38 +157,114 @@ func (a *api) do(method, path, body string, as ...string) response {
 		a.t.Fatalf("read body: %v", err)
 	}
 
-	return response{status: res.StatusCode, body: strings.TrimSpace(string(raw)), header: res.Header}
+	return response{
+		status:  res.StatusCode,
+		body:    strings.TrimSpace(string(raw)),
+		header:  res.Header,
+		cookies: res.Cookies(),
+	}
 }
 
-func (a *api) expect(want int, method, path, body string, as ...string) response {
+func (a *api) expect(want int, method, path, body string, token ...string) response {
 	a.t.Helper()
 
-	res := a.do(method, path, body, as...)
+	var bearer string
+	if len(token) > 0 {
+		bearer = token[0]
+	}
+	res := a.do(method, path, body, bearer, "")
 	if res.status != want {
 		a.t.Errorf("%s %s = %d, want %d: %s", method, path, res.status, want, res.body)
 	}
 	return res
 }
 
-// register creates a user and returns it.
-func (a *api) register(username string) User {
-	a.t.Helper()
-
-	body := fmt.Sprintf(`{"username":%q,"email":"%s@example.test","password":%q}`,
-		username, username, testPassword)
-	res := a.expect(http.StatusCreated, http.MethodPost, "/user/register", body)
-
-	var user User
-	res.json(a.t, &user)
-	return user
+func cookieValue(cookies []*http.Cookie, name string) string {
+	for _, c := range cookies {
+		if c.Name == name {
+			return c.Value
+		}
+	}
+	return ""
 }
 
-// publish creates a package owned by username.
-func (a *api) publish(username, name string) Package {
+// signin walks the OAuth flow against the GitHub stand-in and returns the
+// session secret.
+func (a *api) signin(login string) string {
+	a.t.Helper()
+
+	start := a.do(http.MethodGet, "/auth/github/login", "", "", "")
+	if start.status != http.StatusFound {
+		a.t.Fatalf("login = %d, want a redirect: %s", start.status, start.body)
+	}
+	state := cookieValue(start.cookies, stateCookie)
+	if state == "" {
+		a.t.Fatal("login set no state cookie")
+	}
+	location, err := url.Parse(start.header.Get("Location"))
+	if err != nil || location.Query().Get("state") != state {
+		a.t.Fatalf("login redirected to %q, want the state to match its cookie", start.header.Get("Location"))
+	}
+
+	req, err := http.NewRequest(http.MethodGet,
+		a.url+"/auth/github/callback?code="+url.QueryEscape(login)+"&state="+state, nil)
+	if err != nil {
+		a.t.Fatalf("new request: %v", err)
+	}
+	req.AddCookie(&http.Cookie{Name: stateCookie, Value: state})
+
+	res, err := noRedirects.Do(req)
+	if err != nil {
+		a.t.Fatalf("callback: %v", err)
+	}
+	res.Body.Close()
+	if res.StatusCode != http.StatusSeeOther {
+		a.t.Fatalf("callback = %d, want 303", res.StatusCode)
+	}
+
+	session := cookieValue(res.Cookies(), sessionCookie)
+	if session == "" {
+		a.t.Fatal("callback set no session cookie")
+	}
+	return session
+}
+
+// account is a signed-in user with one minted API token.
+type account struct {
+	ID       uuid.UUID
+	Username string
+	Session  string
+	Token    string
+}
+
+func (a *api) signup(login string) account {
+	a.t.Helper()
+
+	session := a.signin(login)
+
+	me := a.do(http.MethodGet, "/auth/me", "", "", session)
+	if me.status != http.StatusOK {
+		a.t.Fatalf("me = %d: %s", me.status, me.body)
+	}
+	var user PublicUser
+	me.json(a.t, &user)
+
+	minted := a.do(http.MethodPost, "/tokens", `{"name":"test"}`, "", session)
+	if minted.status != http.StatusCreated {
+		a.t.Fatalf("mint token = %d: %s", minted.status, minted.body)
+	}
+	var created CreatedToken
+	minted.json(a.t, &created)
+
+	return account{ID: user.ID, Username: user.Username, Session: session, Token: created.Secret}
+}
+
+// publish creates a package owned by the token's account.
+func (a *api) publish(token, name string) Package {
 	a.t.Helper()
 
 	body := fmt.Sprintf(`{"platform":"linux","name":%q,"description":"a tool"}`, name)
-	res := a.expect(http.StatusCreated, http.MethodPost, "/packages", body, username)
+	res := a.expect(http.StatusCreated, http.MethodPost, "/packages", body, token)
 
 	var pkg Package
 	res.json(a.t, &pkg)
@@ -153,11 +272,11 @@ func (a *api) publish(username, name string) Package {
 }
 
 // release publishes one version of a package.
-func (a *api) release(username, name, version string) Release {
+func (a *api) release(token, name, version string) Release {
 	a.t.Helper()
 
 	body := fmt.Sprintf(`{"url":"https://example.test/%s-%s.tgz","version":%q}`, name, version, version)
-	res := a.expect(http.StatusCreated, http.MethodPost, "/packages/"+name+"/releases", body, username)
+	res := a.expect(http.StatusCreated, http.MethodPost, "/packages/"+name+"/releases", body, token)
 
 	var rel Release
 	res.json(a.t, &rel)
@@ -193,9 +312,12 @@ func TestE2EUnroutedAndMethods(t *testing.T) {
 	}{
 		{http.MethodDelete, "/", "GET, HEAD, OPTIONS"},
 		{http.MethodDelete, "/health", "GET, HEAD, OPTIONS"},
-		{http.MethodGet, "/user/register", "POST, OPTIONS"},
-		{http.MethodGet, "/user/login", "POST, OPTIONS"},
-		{http.MethodGet, "/user/change_password", "POST, OPTIONS"},
+		{http.MethodDelete, "/auth/github/login", "GET, HEAD, OPTIONS"},
+		{http.MethodDelete, "/auth/github/callback", "GET, HEAD, OPTIONS"},
+		{http.MethodGet, "/auth/logout", "POST, OPTIONS"},
+		{http.MethodDelete, "/auth/me", "GET, HEAD, OPTIONS"},
+		{http.MethodDelete, "/tokens", "GET, POST, HEAD, OPTIONS"},
+		{http.MethodGet, "/tokens/anything", "DELETE, OPTIONS"},
 		{http.MethodDelete, "/packages", "GET, POST, HEAD, OPTIONS"},
 		{http.MethodDelete, "/packages/anything", "GET, HEAD, OPTIONS"},
 		{http.MethodDelete, "/packages/anything/releases", "GET, POST, HEAD, OPTIONS"},
@@ -219,122 +341,157 @@ func TestE2EUnroutedAndMethods(t *testing.T) {
 	}
 }
 
-func TestE2ERegister(t *testing.T) {
+func TestE2ESignIn(t *testing.T) {
 	a := newAPI(t)
 
-	user := a.register("alice")
-	if user.Username != "alice" || user.ID.String() == "" {
-		t.Errorf("user = %+v, want a filled record", user)
-	}
-	if user.Packages == nil {
-		t.Error("packages = null, want []")
-	}
-	if strings.Contains(a.do(http.MethodGet, "/users/alice", "").body, "password") {
-		t.Error("a password field reached the wire")
+	acct := a.signup("alice")
+	if acct.Username != "alice" || acct.ID == uuid.Nil {
+		t.Errorf("account = %+v, want a filled record", acct)
 	}
 
-	// Same username and same email both conflict.
-	a.expect(http.StatusConflict, http.MethodPost, "/user/register",
-		`{"username":"alice","email":"other@example.test","password":"`+testPassword+`"}`)
-	a.expect(http.StatusConflict, http.MethodPost, "/user/register",
-		`{"username":"other","email":"alice@example.test","password":"`+testPassword+`"}`)
+	// Signing in again lands on the same account, not a duplicate.
+	again := a.signup("alice")
+	if again.ID != acct.ID {
+		t.Errorf("second sign-in made a new account: %s vs %s", again.ID, acct.ID)
+	}
+	other := a.signup("bob")
+	if other.ID == acct.ID {
+		t.Error("two logins shared one account")
+	}
 
-	for _, body := range []string{
-		`{"username":"","email":"a@example.test","password":"` + testPassword + `"}`,
-		`{"username":"no","email":"a@example.test","password":"` + testPassword + `"}`,
-		`{"username":"-bad-","email":"a@example.test","password":"` + testPassword + `"}`,
-		`{"username":"bob","email":"not-an-email","password":"` + testPassword + `"}`,
-		`{"username":"bob","email":"bob@nodot","password":"` + testPassword + `"}`,
-		`{"username":"bob","email":"bob@example.test","password":"short"}`,
-	} {
-		res := a.expect(http.StatusUnprocessableEntity, http.MethodPost, "/user/register", body)
-		var errRes ErrorResponse
-		res.json(t, &errRes)
-		if len(errRes.Fields) == 0 {
-			t.Errorf("%s named no fields", body)
-		}
+	// The profile exists publicly and leaks no GitHub identity.
+	res := a.expect(http.StatusOK, http.MethodGet, "/users/alice", "")
+	if strings.Contains(res.body, "github") {
+		t.Errorf("profile = %q, want no github fields", res.body)
+	}
+
+	// A callback whose state matches no cookie is turned away.
+	forged := a.do(http.MethodGet, "/auth/github/callback?code=alice&state=forged", "", "", "")
+	if forged.status != http.StatusForbidden {
+		t.Errorf("forged state = %d, want 403", forged.status)
+	}
+
+	// A callback with a matching state but no code is a client error.
+	start := a.do(http.MethodGet, "/auth/github/login", "", "", "")
+	state := cookieValue(start.cookies, stateCookie)
+	req, err := http.NewRequest(http.MethodGet, a.url+"/auth/github/callback?state="+state, nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.AddCookie(&http.Cookie{Name: stateCookie, Value: state})
+	missing, err := noRedirects.Do(req)
+	if err != nil {
+		t.Fatalf("callback: %v", err)
+	}
+	missing.Body.Close()
+	if missing.StatusCode != http.StatusBadRequest {
+		t.Errorf("missing code = %d, want 400", missing.StatusCode)
 	}
 }
 
 func TestE2EBadRequestBodies(t *testing.T) {
 	a := newAPI(t)
+	acct := a.signup("alice")
 
 	for _, c := range []struct{ name, body string }{
 		{"empty", ""},
-		{"malformed", `{"username":`},
-		{"wrong type", `{"username":42,"email":"a@example.test","password":"x"}`},
-		{"unknown field", `{"username":"bob","email":"a@example.test","password":"x","bogus":1}`},
-		{"two objects", `{"username":"bob","email":"a@example.test","password":"x"}{}`},
+		{"malformed", `{"name":`},
+		{"wrong type", `{"name":42}`},
+		{"unknown field", `{"name":"ci","bogus":1}`},
+		{"two objects", `{"name":"ci"}{}`},
 		{"not an object", `[]`},
 	} {
-		res := a.expect(http.StatusBadRequest, http.MethodPost, "/user/register", c.body)
+		res := a.do(http.MethodPost, "/tokens", c.body, "", acct.Session)
+		if res.status != http.StatusBadRequest {
+			t.Errorf("%s: status = %d, want 400: %s", c.name, res.status, res.body)
+		}
 		if !strings.Contains(res.body, `"error"`) {
 			t.Errorf("%s: body = %q, want a JSON error", c.name, res.body)
 		}
 	}
 
 	// A body over the limit is rejected on size, not parsed.
-	big := `{"username":"bob","email":"a@example.test","password":"` + strings.Repeat("x", 1<<21) + `"}`
-	a.expect(http.StatusRequestEntityTooLarge, http.MethodPost, "/user/register", big)
+	big := `{"name":"` + strings.Repeat("x", 1<<21) + `"}`
+	if res := a.do(http.MethodPost, "/tokens", big, "", acct.Session); res.status != http.StatusRequestEntityTooLarge {
+		t.Errorf("big body = %d, want 413", res.status)
+	}
+
+	// Auth runs before the decode, so no session means no parsing at all.
+	if res := a.do(http.MethodPost, "/tokens", `{"name":"ci"}`, "", ""); res.status != http.StatusUnauthorized {
+		t.Errorf("no session = %d, want 401", res.status)
+	}
 }
 
-func TestE2ELogin(t *testing.T) {
+func TestE2ETokens(t *testing.T) {
 	a := newAPI(t)
-	a.register("alice")
-	a.publish("alice", "alice-tool")
+	acct := a.signup("alice")
 
-	res := a.expect(http.StatusOK, http.MethodPost, "/user/login",
-		`{"username":"alice","password":"`+testPassword+`"}`)
-
-	var user User
-	res.json(t, &user)
-	if len(user.Packages) != 1 {
-		t.Errorf("packages = %d, want 1", len(user.Packages))
-	}
-	if user.Packages[0].Releases == nil {
-		t.Error("releases = null, want []")
+	if !strings.HasPrefix(acct.Token, tokenPrefix) {
+		t.Errorf("token = %q, want the %q prefix", acct.Token, tokenPrefix)
 	}
 
-	// A wrong password and an unknown user answer identically.
-	wrongPassword := a.expect(http.StatusUnauthorized, http.MethodPost, "/user/login",
-		`{"username":"alice","password":"not-the-password"}`)
-	unknownUser := a.expect(http.StatusUnauthorized, http.MethodPost, "/user/login",
-		`{"username":"nobody","password":"`+testPassword+`"}`)
-	if wrongPassword.body != unknownUser.body {
-		t.Errorf("login answers differ: %q vs %q", wrongPassword.body, unknownUser.body)
+	// The bearer identifies its account.
+	me := a.expect(http.StatusOK, http.MethodGet, "/auth/me", "", acct.Token)
+	var user PublicUser
+	me.json(t, &user)
+	if user.Username != "alice" {
+		t.Errorf("me = %+v, want alice", user)
 	}
 
-	a.expect(http.StatusUnprocessableEntity, http.MethodPost, "/user/login",
-		`{"username":"","password":""}`)
-}
+	// The list shows the token without its secret or hash.
+	list := a.do(http.MethodGet, "/tokens", "", "", acct.Session)
+	if list.status != http.StatusOK {
+		t.Fatalf("list = %d: %s", list.status, list.body)
+	}
+	var tokens []Token
+	list.json(t, &tokens)
+	if len(tokens) != 1 || tokens[0].Name != "test" {
+		t.Errorf("tokens = %+v, want the one named test", tokens)
+	}
+	if strings.Contains(list.body, acct.Token) || strings.Contains(list.body, "hash") {
+		t.Errorf("list = %q, want no secret material", list.body)
+	}
 
-func TestE2EChangePassword(t *testing.T) {
-	a := newAPI(t)
-	a.register("alice")
+	// A blank name is a field error.
+	if res := a.do(http.MethodPost, "/tokens", `{"name":"  "}`, "", acct.Session); res.status != http.StatusUnprocessableEntity {
+		t.Errorf("blank name = %d, want 422", res.status)
+	}
 
-	const next = "another-good-password"
-	a.expect(http.StatusOK, http.MethodPost, "/user/change_password",
-		fmt.Sprintf(`{"username":"alice","currentPassword":%q,"newPassword":%q}`, testPassword, next))
+	// Revoking someone else's token reveals nothing.
+	bob := a.signup("bob")
+	var bobTokens []Token
+	a.do(http.MethodGet, "/tokens", "", "", bob.Session).json(t, &bobTokens)
+	if res := a.do(http.MethodDelete, "/tokens/"+bobTokens[0].ID.String(), "", "", acct.Session); res.status != http.StatusNotFound {
+		t.Errorf("cross-account revoke = %d, want 404", res.status)
+	}
 
-	// The old password stops working and the new one starts.
-	a.expect(http.StatusUnauthorized, http.MethodPost, "/user/login",
-		`{"username":"alice","password":"`+testPassword+`"}`)
-	a.expect(http.StatusOK, http.MethodPost, "/user/login",
-		fmt.Sprintf(`{"username":"alice","password":%q}`, next))
+	// Revoking kills the credential.
+	if res := a.do(http.MethodDelete, "/tokens/"+tokens[0].ID.String(), "", "", acct.Session); res.status != http.StatusOK {
+		t.Errorf("revoke = %d, want 200", res.status)
+	}
+	revoked := a.expect(http.StatusUnauthorized, http.MethodGet, "/auth/me", "", acct.Token)
+	if revoked.header.Get("WWW-Authenticate") == "" {
+		t.Error("401 carried no WWW-Authenticate challenge")
+	}
+	if res := a.do(http.MethodDelete, "/tokens/"+tokens[0].ID.String(), "", "", acct.Session); res.status != http.StatusNotFound {
+		t.Errorf("second revoke = %d, want 404", res.status)
+	}
 
-	a.expect(http.StatusUnauthorized, http.MethodPost, "/user/change_password",
-		fmt.Sprintf(`{"username":"alice","currentPassword":"wrong","newPassword":%q}`, next))
-	a.expect(http.StatusUnauthorized, http.MethodPost, "/user/change_password",
-		fmt.Sprintf(`{"username":"nobody","currentPassword":%q,"newPassword":%q}`, testPassword, next))
-	a.expect(http.StatusUnprocessableEntity, http.MethodPost, "/user/change_password",
-		fmt.Sprintf(`{"username":"alice","currentPassword":%q,"newPassword":%q}`, next, next))
+	// Signing out kills the session but not other credentials.
+	if res := a.do(http.MethodPost, "/auth/logout", "", "", acct.Session); res.status != http.StatusOK {
+		t.Errorf("logout = %d, want 200", res.status)
+	}
+	if res := a.do(http.MethodGet, "/tokens", "", "", acct.Session); res.status != http.StatusUnauthorized {
+		t.Errorf("list after logout = %d, want 401", res.status)
+	}
+	a.expect(http.StatusOK, http.MethodGet, "/auth/me", "", bob.Token)
 }
 
 func TestE2EGetUser(t *testing.T) {
 	a := newAPI(t)
-	a.register("alice")
-	a.publish("alice", "alice-tool")
-	a.release("alice", "alice-tool", "1.0.0")
+	acct := a.signup("alice")
+	a.publish(acct.Token, "alice-tool")
+	a.release(acct.Token, "alice-tool", "1.0.0")
 
 	res := a.expect(http.StatusOK, http.MethodGet, "/users/alice", "")
 	var public PublicUser
@@ -345,19 +502,16 @@ func TestE2EGetUser(t *testing.T) {
 	if len(public.Packages[0].Releases) != 1 {
 		t.Errorf("releases = %d, want 1", len(public.Packages[0].Releases))
 	}
-	if strings.Contains(res.body, "@example.test") {
-		t.Error("the email reached a public profile")
-	}
 
 	a.expect(http.StatusNotFound, http.MethodGet, "/users/nobody", "")
 }
 
 func TestE2EUserPackages(t *testing.T) {
 	a := newAPI(t)
-	a.register("alice")
-	a.register("bob")
-	a.publish("alice", "alice-tool")
-	a.release("alice", "alice-tool", "1.0.0")
+	alice := a.signup("alice")
+	a.signup("bob")
+	a.publish(alice.Token, "alice-tool")
+	a.release(alice.Token, "alice-tool", "1.0.0")
 
 	res := a.expect(http.StatusOK, http.MethodGet, "/users/alice/packages", "")
 	var packages []Package
@@ -377,9 +531,9 @@ func TestE2EUserPackages(t *testing.T) {
 
 func TestE2EPublishPackage(t *testing.T) {
 	a := newAPI(t)
-	a.register("alice")
+	acct := a.signup("alice")
 
-	pkg := a.publish("alice", "alice-tool")
+	pkg := a.publish(acct.Token, "alice-tool")
 	if pkg.Name != "alice-tool" || pkg.Description != "a tool" || pkg.Releases == nil {
 		t.Errorf("package = %+v, want a filled record with []", pkg)
 	}
@@ -391,9 +545,14 @@ func TestE2EPublishPackage(t *testing.T) {
 		t.Error("401 carried no WWW-Authenticate challenge")
 	}
 
+	// A session is a browser credential; publishing wants a token.
+	if got := a.do(http.MethodPost, "/packages", `{"platform":"linux","name":"nope"}`, "", acct.Session); got.status != http.StatusUnauthorized {
+		t.Errorf("session publish = %d, want 401", got.status)
+	}
+
 	// A name is taken globally, not per platform.
 	a.expect(http.StatusConflict, http.MethodPost, "/packages",
-		`{"platform":"darwin","name":"alice-tool"}`, "alice")
+		`{"platform":"darwin","name":"alice-tool"}`, acct.Token)
 
 	for _, body := range []string{
 		`{"platform":"","name":"valid-name"}`,
@@ -401,38 +560,24 @@ func TestE2EPublishPackage(t *testing.T) {
 		`{"platform":"linux","name":"bad name"}`,
 		`{"platform":"linux","name":"-leading-dash"}`,
 	} {
-		a.expect(http.StatusUnprocessableEntity, http.MethodPost, "/packages", body, "alice")
+		a.expect(http.StatusUnprocessableEntity, http.MethodPost, "/packages", body, acct.Token)
 	}
 }
 
-func TestE2EWrongPasswordCannotPublish(t *testing.T) {
+func TestE2EWrongTokenCannotPublish(t *testing.T) {
 	a := newAPI(t)
-	a.register("alice")
+	a.signup("alice")
 
-	req, err := http.NewRequest(http.MethodPost, a.url+"/packages",
-		strings.NewReader(`{"platform":"linux","name":"alice-tool"}`))
-	if err != nil {
-		t.Fatalf("new request: %v", err)
-	}
-	req.SetBasicAuth("alice", "not-the-password")
-
-	res, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("post: %v", err)
-	}
-	defer res.Body.Close()
-
-	if res.StatusCode != http.StatusUnauthorized {
-		t.Errorf("status = %d, want 401", res.StatusCode)
-	}
+	a.expect(http.StatusUnauthorized, http.MethodPost, "/packages",
+		`{"platform":"linux","name":"alice-tool"}`, "lpm_not-a-real-token")
 }
 
 func TestE2EGetPackage(t *testing.T) {
 	a := newAPI(t)
-	a.register("alice")
-	a.publish("alice", "alice-tool")
-	a.release("alice", "alice-tool", "1.0.0")
-	a.release("alice", "alice-tool", "2.0.0")
+	acct := a.signup("alice")
+	a.publish(acct.Token, "alice-tool")
+	a.release(acct.Token, "alice-tool", "1.0.0")
+	a.release(acct.Token, "alice-tool", "2.0.0")
 
 	res := a.expect(http.StatusOK, http.MethodGet, "/packages/alice-tool", "")
 	var pkg Package
@@ -450,10 +595,10 @@ func TestE2EGetPackage(t *testing.T) {
 
 func TestE2EPackageReleases(t *testing.T) {
 	a := newAPI(t)
-	a.register("alice")
-	a.publish("alice", "alice-tool")
-	a.publish("alice", "alice-empty")
-	a.release("alice", "alice-tool", "1.0.0")
+	acct := a.signup("alice")
+	a.publish(acct.Token, "alice-tool")
+	a.publish(acct.Token, "alice-empty")
+	a.release(acct.Token, "alice-tool", "1.0.0")
 
 	res := a.expect(http.StatusOK, http.MethodGet, "/packages/alice-tool/releases", "")
 	var releases []Release
@@ -472,26 +617,26 @@ func TestE2EPackageReleases(t *testing.T) {
 
 func TestE2EPublishRelease(t *testing.T) {
 	a := newAPI(t)
-	a.register("alice")
-	a.register("bob")
-	a.publish("alice", "alice-tool")
+	alice := a.signup("alice")
+	bob := a.signup("bob")
+	a.publish(alice.Token, "alice-tool")
 
-	rel := a.release("alice", "alice-tool", "1.0.0")
+	rel := a.release(alice.Token, "alice-tool", "1.0.0")
 	if rel.Version != "1.0.0" || rel.CreatedAt.IsZero() {
 		t.Errorf("release = %+v, want a filled record", rel)
 	}
 
 	// A version that is wider than semver still round-trips through the path.
 	const odd = "v2.0.0-rc.1+build.5"
-	a.release("alice", "alice-tool", odd)
+	a.release(alice.Token, "alice-tool", odd)
 	a.expect(http.StatusOK, http.MethodGet, "/packages/alice-tool/releases/"+odd, "")
 
 	body := `{"url":"https://example.test/x.tgz","version":"3.0.0"}`
 	a.expect(http.StatusUnauthorized, http.MethodPost, "/packages/alice-tool/releases", body)
-	a.expect(http.StatusForbidden, http.MethodPost, "/packages/alice-tool/releases", body, "bob")
-	a.expect(http.StatusNotFound, http.MethodPost, "/packages/nothing-here/releases", body, "alice")
+	a.expect(http.StatusForbidden, http.MethodPost, "/packages/alice-tool/releases", body, bob.Token)
+	a.expect(http.StatusNotFound, http.MethodPost, "/packages/nothing-here/releases", body, alice.Token)
 	a.expect(http.StatusConflict, http.MethodPost, "/packages/alice-tool/releases",
-		`{"url":"https://example.test/again.tgz","version":"1.0.0"}`, "alice")
+		`{"url":"https://example.test/again.tgz","version":"1.0.0"}`, alice.Token)
 
 	for _, invalid := range []string{
 		`{"url":"","version":"9.0.0"}`,
@@ -504,15 +649,15 @@ func TestE2EPublishRelease(t *testing.T) {
 		`{"url":"https://example.test/x.tgz","version":"9 0 0"}`,
 	} {
 		a.expect(http.StatusUnprocessableEntity, http.MethodPost,
-			"/packages/alice-tool/releases", invalid, "alice")
+			"/packages/alice-tool/releases", invalid, alice.Token)
 	}
 }
 
 func TestE2EGetRelease(t *testing.T) {
 	a := newAPI(t)
-	a.register("alice")
-	a.publish("alice", "alice-tool")
-	a.release("alice", "alice-tool", "1.0.0")
+	acct := a.signup("alice")
+	a.publish(acct.Token, "alice-tool")
+	a.release(acct.Token, "alice-tool", "1.0.0")
 
 	res := a.expect(http.StatusOK, http.MethodGet, "/packages/alice-tool/releases/1.0.0", "")
 	var rel Release
@@ -533,13 +678,13 @@ func TestE2EGetRelease(t *testing.T) {
 
 func TestE2ESearchPackages(t *testing.T) {
 	a := newAPI(t)
-	a.register("alice")
-	a.register("bob")
-	a.publish("alice", "alice-tool")
-	a.release("alice", "alice-tool", "1.0.0")
+	alice := a.signup("alice")
+	bob := a.signup("bob")
+	a.publish(alice.Token, "alice-tool")
+	a.release(alice.Token, "alice-tool", "1.0.0")
 
 	body := `{"platform":"darwin","name":"bob-kit","description":"a widget"}`
-	a.expect(http.StatusCreated, http.MethodPost, "/packages", body, "bob")
+	a.expect(http.StatusCreated, http.MethodPost, "/packages", body, bob.Token)
 
 	names := func(query string) []string {
 		a.t.Helper()
@@ -601,8 +746,8 @@ func TestE2ESearchPackages(t *testing.T) {
 
 func TestE2ELimitIsCapped(t *testing.T) {
 	a := newAPI(t)
-	a.register("alice")
-	a.publish("alice", "alice-tool")
+	acct := a.signup("alice")
+	a.publish(acct.Token, "alice-tool")
 
 	// Over the cap is clamped, not rejected.
 	res := a.expect(http.StatusOK, http.MethodGet, "/packages?limit=100000", "")
@@ -637,10 +782,10 @@ func TestE2ERequestIDIsEchoedByTheLogger(t *testing.T) {
 func TestE2EFullPublishFlow(t *testing.T) {
 	a := newAPI(t)
 
-	a.register("alice")
-	a.publish("alice", "alice-tool")
-	a.release("alice", "alice-tool", "1.0.0")
-	a.release("alice", "alice-tool", "1.1.0")
+	acct := a.signup("alice")
+	a.publish(acct.Token, "alice-tool")
+	a.release(acct.Token, "alice-tool", "1.0.0")
+	a.release(acct.Token, "alice-tool", "1.1.0")
 
 	// The package, its releases, one release, and the publisher's profile all
 	// agree about what was published.

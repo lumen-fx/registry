@@ -23,12 +23,11 @@ type StatusResponse struct {
 }
 
 type User struct {
-	ID           uuid.UUID `json:"id" db:"id"`
-	Username     string    `json:"username" db:"username"`
-	Email        string    `json:"email" db:"email"`
-	PasswordHash string    `json:"-" db:"password_hash"`
-	CreatedAt    time.Time `json:"createdAt" db:"created_at"`
-	Packages     []Package `json:"packages" db:"-"`
+	ID        uuid.UUID `json:"id" db:"id"`
+	Username  string    `json:"username" db:"username"`
+	GitHubID  int64     `json:"-" db:"github_id"`
+	CreatedAt time.Time `json:"createdAt" db:"created_at"`
+	Packages  []Package `json:"packages" db:"-"`
 }
 
 // PublicUser hides fields only the owner may see.
@@ -43,21 +42,24 @@ func (u *User) Public() PublicUser {
 	return PublicUser{ID: u.ID, Username: u.Username, CreatedAt: u.CreatedAt, Packages: u.Packages}
 }
 
-type UserRegister struct {
-	Username string `json:"username" db:"username"`
-	Email    string `json:"email" db:"email"`
-	Password string `json:"password" db:"password"`
+// Token rows never expose the hash; the secret exists only in the create
+// response.
+type Token struct {
+	ID         uuid.UUID  `json:"id" db:"id"`
+	UserID     uuid.UUID  `json:"-" db:"user_id"`
+	Name       string     `json:"name" db:"name"`
+	TokenHash  string     `json:"-" db:"token_hash"`
+	CreatedAt  time.Time  `json:"createdAt" db:"created_at"`
+	LastUsedAt *time.Time `json:"lastUsedAt" db:"last_used_at"`
 }
 
-type UserLogin struct {
-	Username string `json:"username" db:"username"`
-	Password string `json:"password" db:"password"`
+type NewToken struct {
+	Name string `json:"name"`
 }
 
-type UserResetPassword struct {
-	Username        string `json:"username" db:"username"`
-	CurrentPassword string `json:"currentPassword"`
-	NewPassword     string `json:"newPassword"`
+type CreatedToken struct {
+	Token
+	Secret string `json:"token"`
 }
 
 type Release struct {

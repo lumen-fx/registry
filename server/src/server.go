@@ -8,11 +8,12 @@ import (
 )
 
 type Server struct {
-	db *pgxpool.Pool
+	db     *pgxpool.Pool
+	github githubOAuth
 }
 
 func NewServer(db *pgxpool.Pool) *Server {
-	return &Server{db: db}
+	return &Server{db: db, github: configGitHub()}
 }
 
 // Routes maps paths. Bare patterns give JSON 405s.
@@ -33,14 +34,24 @@ func (s *Server) Routes() *http.ServeMux {
 	mux.HandleFunc("GET /users/{username}", s.GetUserHandler)
 	mux.HandleFunc("/users/{username}", methodNotAllowed(http.MethodGet))
 
-	mux.HandleFunc("POST /user/register", s.UserRegisterHandler)
-	mux.HandleFunc("/user/register", methodNotAllowed(http.MethodPost))
+	mux.HandleFunc("GET /auth/github/login", s.GitHubLoginHandler)
+	mux.HandleFunc("/auth/github/login", methodNotAllowed(http.MethodGet))
 
-	mux.HandleFunc("POST /user/login", s.UserLoginHandler)
-	mux.HandleFunc("/user/login", methodNotAllowed(http.MethodPost))
+	mux.HandleFunc("GET /auth/github/callback", s.GitHubCallbackHandler)
+	mux.HandleFunc("/auth/github/callback", methodNotAllowed(http.MethodGet))
 
-	mux.HandleFunc("POST /user/change_password", s.UserChangePasswordHandler)
-	mux.HandleFunc("/user/change_password", methodNotAllowed(http.MethodPost))
+	mux.HandleFunc("POST /auth/logout", s.LogoutHandler)
+	mux.HandleFunc("/auth/logout", methodNotAllowed(http.MethodPost))
+
+	mux.HandleFunc("GET /auth/me", s.MeHandler)
+	mux.HandleFunc("/auth/me", methodNotAllowed(http.MethodGet))
+
+	mux.HandleFunc("GET /tokens", s.ListTokensHandler)
+	mux.HandleFunc("POST /tokens", s.CreateTokenHandler)
+	mux.HandleFunc("/tokens", methodNotAllowed(http.MethodGet, http.MethodPost))
+
+	mux.HandleFunc("DELETE /tokens/{token}", s.RevokeTokenHandler)
+	mux.HandleFunc("/tokens/{token}", methodNotAllowed(http.MethodDelete))
 
 	mux.HandleFunc("GET /users/{username}/packages", s.UserPackagesHandler)
 	mux.HandleFunc("/users/{username}/packages", methodNotAllowed(http.MethodGet))

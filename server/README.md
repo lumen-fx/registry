@@ -1,8 +1,8 @@
 # lpm-server
 
-A package registry API. Users register, publish packages, and publish releases
-against them. Postgres holds everything; the service is a single Go binary with
-no runtime dependencies.
+A package registry API. Users sign in with GitHub, publish packages, and
+publish releases against them. Postgres holds everything; the service is a
+single Go binary with no runtime dependencies.
 
 ## API
 
@@ -11,16 +11,20 @@ no runtime dependencies.
 | `GET` | `/` | none | The web UI. Static, no database access, doubles as liveness. |
 | `GET` | `/health` | none | Pings the pool. `503` when the database is down. |
 | `GET` | `/install.sh` | none | Installer for the `lpm` CLI. Static. |
-| `POST` | `/user/register` | none | `201`, or `409` when the username or email is taken. |
-| `POST` | `/user/login` | none | Returns the caller's own record with their packages. |
-| `POST` | `/user/change_password` | body | `401` on a wrong current password. |
+| `GET` | `/auth/github/login` | none | Starts GitHub sign-in with a redirect. |
+| `GET` | `/auth/github/callback` | none | Finishes sign-in and sets the session cookie. |
+| `POST` | `/auth/logout` | session | Ends the browser session. |
+| `GET` | `/auth/me` | session or token | The signed-in account. |
+| `GET` | `/tokens` | session | The account's API tokens, without their secrets. |
+| `POST` | `/tokens` | session | Mints a token. The secret appears once, in this response. |
+| `DELETE` | `/tokens/{token}` | session | Revokes a token. |
 | `GET` | `/users/{username}` | none | Public profile with packages and releases. |
 | `GET` | `/users/{username}/packages` | none | That user's packages. |
 | `GET` | `/packages` | none | Search. See the filters below. |
-| `POST` | `/packages` | basic | `201`, or `409` when the name is taken. |
+| `POST` | `/packages` | token | `201`, or `409` when the name is taken. |
 | `GET` | `/packages/{package}` | none | One package with its releases, newest first. |
 | `GET` | `/packages/{package}/releases` | none | Just the releases. |
-| `POST` | `/packages/{package}/releases` | basic | Publisher only. `403` for anyone else. |
+| `POST` | `/packages/{package}/releases` | token | Publisher only. `403` for anyone else. |
 | `GET` | `/packages/{package}/releases/{version}` | none | One release. |
 
 Search filters on `GET /packages`, all optional and combined with AND:
@@ -41,6 +45,16 @@ client can fix a whole form from one response:
 Release URLs must be `https` with no embedded credentials. Clients fetch them
 to install code, so plain `http` would leave the artifact open to tampering in
 transit.
+
+## Accounts
+
+Accounts come from GitHub sign-in; there are no passwords. The OAuth callback
+sets a week-long session cookie for the browser, and publishing uses API
+tokens minted on the UI's account page. A token is sent as
+`Authorization: Bearer lpm_...` and is stored hashed, so its secret exists
+only in the create response. Set `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET`
+from a GitHub OAuth app whose callback is `<host>/auth/github/callback`;
+without them, sign-in answers `503` and the rest of the API works read-only.
 
 ## Layout
 
@@ -72,6 +86,8 @@ listens on `:8080`.
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `DATABASE_URL` | none, required | Postgres connection string. |
+| `GITHUB_CLIENT_ID` | none | OAuth app client id. Sign-in is `503` without it. |
+| `GITHUB_CLIENT_SECRET` | none | OAuth app client secret. |
 | `MIGRATE_ON_BOOT` | `false` | Migrate before serving. Local convenience only. |
 | `TEST_DATABASE_URL` | none | Database for the end-to-end tests. |
 

@@ -2,7 +2,6 @@ package internal
 
 import (
 	"encoding/json"
-	"strings"
 	"testing"
 	"time"
 
@@ -11,12 +10,10 @@ import (
 
 func TestUserPublicDropsPrivateFields(t *testing.T) {
 	u := User{
-		ID:           uuid.New(),
-		Username:     "ada",
-		Email:        "ada@example.com",
-		PasswordHash: "argon2id$...",
-		CreatedAt:    time.Now(),
-		Packages:     []Package{{Name: "lantern"}},
+		ID:        uuid.New(),
+		Username:  "ada",
+		CreatedAt: time.Now(),
+		Packages:  []Package{{Name: "lantern"}},
 	}
 
 	p := u.Public()
@@ -27,24 +24,7 @@ func TestUserPublicDropsPrivateFields(t *testing.T) {
 		t.Errorf("Public() lost packages: %+v", p.Packages)
 	}
 
-	out, err := json.Marshal(p)
-	if err != nil {
+	if _, err := json.Marshal(p); err != nil {
 		t.Fatal(err)
-	}
-	for _, secret := range []string{u.Email, u.PasswordHash} {
-		if strings.Contains(string(out), secret) {
-			t.Errorf("public JSON leaks %q: %s", secret, out)
-		}
-	}
-}
-
-func TestUserJSONHidesPasswordHash(t *testing.T) {
-	u := User{Username: "ada", PasswordHash: "argon2id$..."}
-	out, err := json.Marshal(u)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(out), u.PasswordHash) {
-		t.Errorf("user JSON leaks the password hash: %s", out)
 	}
 }
