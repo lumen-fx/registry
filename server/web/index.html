@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>lpm — packages for Lumen and Candela</title>
+<title>lpm: packages for Lumen and Candela</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2016%2016'%3E%3Ccircle%20cx='6'%20cy='8'%20r='4'%20fill='%234B83D6'/%3E%3Ccircle%20cx='11'%20cy='8'%20r='4'%20fill='%23D08700'%20fill-opacity='.85'/%3E%3C/svg%3E">
 <style>
 :root {
@@ -236,7 +236,7 @@ async function renderHome() {
 }
 
 async function renderPackage(name) {
-  state("Looking up " + name + "…");
+  state("Looking up " + name + "...");
   let pkg;
   try {
     pkg = await fetchJSON("/packages/" + encodeURIComponent(name));
@@ -246,7 +246,7 @@ async function renderPackage(name) {
   if (!pkg) return state("No package is named " + name + ".");
 
   const crumb = el("div", "crumb");
-  const back = el("a", "", "← all packages");
+  const back = el("a", "", "<- all packages");
   back.href = "#/";
   crumb.append(back);
 
@@ -261,7 +261,7 @@ async function renderPackage(name) {
     by.append("published by ");
     const who = el("a", "", pkg.publisher.username);
     who.href = "#/u/" + encodeURIComponent(pkg.publisher.username);
-    by.append(who, document.createTextNode(" · since " + day(pkg.createdAt)));
+    by.append(who, document.createTextNode(" (since " + day(pkg.createdAt) + ")"));
     frag.append(by);
   }
 
@@ -287,7 +287,7 @@ async function renderPackage(name) {
 }
 
 async function renderUser(username) {
-  state("Looking up " + username + "…");
+  state("Looking up " + username + "...");
   let user;
   try {
     user = await fetchJSON("/users/" + encodeURIComponent(username));
@@ -297,7 +297,7 @@ async function renderUser(username) {
   if (!user) return state("No user is named " + username + ".");
 
   const crumb = el("div", "crumb");
-  const back = el("a", "", "← all packages");
+  const back = el("a", "", "<- all packages");
   back.href = "#/";
   crumb.append(back);
 
