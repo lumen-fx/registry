@@ -8,6 +8,9 @@ project_name: lpm
 before:
   hooks:
     - go mod tidy
+    # The license lives at the repository root, shared with the server; the
+    # copy is gitignored and exists only so the archives can carry it.
+    - cp ../LICENSE .
 
 builds:
   - id: lpm
