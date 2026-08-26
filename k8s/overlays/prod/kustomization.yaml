@@ -1,0 +1,26 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# The production cluster. Traffic arrives through a Cloudflare tunnel instead
+# of an Ingress, and a daily CronJob picks up new images from GHCR. The tunnel
+# token is not committed; create it once before applying:
+#
+#   kubectl -n lpm create secret generic cloudflare-tunnel \
+#     --from-literal=token=<tunnel token>
+#   kubectl apply -k k8s/overlays/prod
+
+resources:
+  - ../../base
+  - cloudflared.yaml
+  - update-cronjob.yaml
+
+patches:
+  # cloudflared reaches the Service directly, so no ingress controller or
+  # certificate is involved; Cloudflare terminates TLS at its edge.
+  - patch: |-
+      $patch: delete
+      apiVersion: networking.k8s.io/v1
+      kind: Ingress
+      metadata:
+        name: lpm-server
+        namespace: lpm

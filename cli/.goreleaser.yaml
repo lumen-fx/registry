@@ -1,0 +1,73 @@
+# GoReleaser builds and publishes the release artifacts. `release.yml` runs
+# this on a tag to publish, and on every pull request with --snapshot so a
+# break here is caught before the tag is cut.
+version: 2
+
+project_name: lpm
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: lpm
+    binary: lpm
+    main: .
+    # A CLI that shells out to nothing needs no libc, and a static binary runs
+    # on musl and glibc alike. It also lets the linux and darwin targets
+    # cross-compile from the same ubuntu runner without a toolchain per target.
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    # `lpm --version` has to report the released version. Without these the
+    # binary reports whatever the source defaults say, which is "dev" forever.
+    ldflags:
+      - -s -w
+      - -X github.com/lumen-fx/registry/cli/cmd.version={{ .Version }}
+      - -X github.com/lumen-fx/registry/cli/cmd.commit={{ .Commit }}
+      - -X github.com/lumen-fx/registry/cli/cmd.date={{ .CommitDate }}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - id: lpm
+    ids: [lpm]
+    # tar.gz everywhere except Windows, where zip is what the platform's own
+    # tools open without installing anything.
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    files:
+      - LICENSE
+      - README.md
+
+checksum:
+  name_template: checksums.txt
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  use: github
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - "^ci:"
+
+release:
+  # A pre-release tag (v1.2.0-rc.1) should not become the version `go install`
+  # and the install scripts pick up by default.
+  prerelease: auto

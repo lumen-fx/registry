@@ -4,7 +4,7 @@ import (
 	"log/slog"
 	"os"
 
-	"lpm-server/src"
+	"github.com/lumen-fx/registry/server/src"
 
 	"github.com/joho/godotenv"
 )

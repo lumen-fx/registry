@@ -1,6 +1,8 @@
 name: ci
 
-# Format, vet, and test the module. All three are required checks on main.
+# Format, vet, and test both modules. fmt, vet, and test are required checks
+# on main, so each job covers server/ and cli/ inside one job: a matrix would
+# rename the checks and the ruleset would wait on names that no longer exist.
 
 on:
   push:
@@ -30,11 +32,11 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version-file: go.mod
+          go-version-file: server/go.mod
       - name: gofmt
         run: |
           set -euo pipefail
-          out=$(gofmt -l .)
+          out=$(gofmt -l server cli)
           if [ -n "$out" ]; then
             echo "gofmt needs to run on:"
             echo "$out"
@@ -49,14 +51,17 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version-file: go.mod
+          go-version-file: server/go.mod
       - name: go vet
-        run: go vet ./...
+        run: |
+          set -euo pipefail
+          (cd server && go vet ./...)
+          (cd cli && go vet ./...)
 
   test:
     name: test
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 15
 
     # The end-to-end tests drive the API against this database. Without
     # TEST_DATABASE_URL they skip themselves, which would pass the job while
@@ -82,8 +87,71 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version-file: go.mod
+          go-version-file: server/go.mod
+      - name: go test
+        run: |
+          set -euo pipefail
+          (cd server && go test -race ./...)
+          (cd cli && go test -race ./...)
+
+  # The CLI ships as a binary its users run on their own machine, so its suite
+  # also runs on the platforms a release builds for. Path handling, terminal
+  # detection, and config-directory lookup are the parts that differ, and they
+  # only differ where the tests actually run. Not a required check: test above
+  # already runs the suite on ubuntu.
+  cli-test:
+    name: cli-test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: cli/go.mod
       - name: go build
         run: go build ./...
+        working-directory: cli
       - name: go test
         run: go test -race ./...
+        working-directory: cli
+
+  # A release cross-compiles the CLI for platforms no runner above covers.
+  # Compiling them on every pull request means a build tag or a syscall that
+  # exists on one GOOS and not another fails here, on the change that
+  # introduced it, instead of on the tag when the release is cut.
+  cross-build:
+    name: cross-build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+          - goos: darwin
+            goarch: amd64
+          - goos: darwin
+            goarch: arm64
+          - goos: windows
+            goarch: amd64
+          - goos: windows
+            goarch: arm64
+    env:
+      CGO_ENABLED: "0"
+      GOOS: ${{ matrix.goos }}
+      GOARCH: ${{ matrix.goarch }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: cli/go.mod
+      - name: go build
+        run: go build ./...
+        working-directory: cli

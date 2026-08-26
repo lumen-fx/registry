@@ -6,7 +6,7 @@ import (
 	"io/fs"
 	"strings"
 
-	"lpm-server/migrations"
+	"github.com/lumen-fx/registry/server/migrations"
 
 	"github.com/golang-migrate/migrate/v4"
 	_ "github.com/golang-migrate/migrate/v4/database/pgx/v5"

@@ -1,8 +1,10 @@
 name: codeql
 
-# CodeQL security analysis of the Go service and the workflow files. Go is
-# analyzed with autobuild, which runs the module build the same way CI does;
-# the workflows scan without a build. Alerts land on the repository Security
+# CodeQL security analysis of both Go modules and the workflow files. Go is
+# analyzed without a build: autobuild runs `go build ./...` at the repository
+# root, and with two modules there is no module there to build. The extractor
+# reads both modules from source instead. The workflows also scan without a
+# build. Alerts land on the repository Security
 # tab, and the main-branch ruleset requires a result from this analysis
 # before a pull request can merge.
 
@@ -38,7 +40,7 @@ jobs:
           - language: actions
             build-mode: none
           - language: go
-            build-mode: autobuild
+            build-mode: none
     steps:
       - uses: actions/checkout@v4
 
