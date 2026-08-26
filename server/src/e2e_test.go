@@ -168,8 +168,8 @@ func TestE2ERootAndHealth(t *testing.T) {
 	a := newAPI(t)
 
 	res := a.expect(http.StatusOK, http.MethodGet, "/", "")
-	if res.body != "Hello, World!" {
-		t.Errorf("body = %q, want the greeting", res.body)
+	if !strings.Contains(res.body, "<!doctype html") || !strings.Contains(res.body, "lpm") {
+		t.Errorf("body = %.80q..., want the web UI", res.body)
 	}
 
 	res = a.expect(http.StatusOK, http.MethodGet, "/health", "")

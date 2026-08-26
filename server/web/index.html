@@ -1,0 +1,326 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>lpm — packages for Lumen and Candela</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2016%2016'%3E%3Ccircle%20cx='6'%20cy='8'%20r='4'%20fill='%234B83D6'/%3E%3Ccircle%20cx='11'%20cy='8'%20r='4'%20fill='%23D08700'%20fill-opacity='.85'/%3E%3C/svg%3E">
+<style>
+:root {
+  --paper: #FAFAF8;
+  --ink: #1D1C1A;
+  --muted: #6F6A63;
+  --line: #E5E2DC;
+  --card: #FFFFFF;
+  --daylight: #356FC4;   /* Lumen: cool light */
+  --flame: #B36E00;      /* Candela: warm light */
+  --glow: rgba(208, 135, 0, .25);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper: #161513;
+    --ink: #EAE7E1;
+    --muted: #9B958C;
+    --line: #2B2925;
+    --card: #1D1B19;
+    --daylight: #7FA9E8;
+    --flame: #E0A63C;
+    --glow: rgba(224, 166, 60, .22);
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  background: var(--paper);
+  color: var(--ink);
+  font: 15px/1.6 system-ui, sans-serif;
+}
+code, .mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+main { max-width: 44rem; margin: 0 auto; padding: 2.5rem 1.25rem 4rem; }
+
+header { display: flex; align-items: baseline; gap: .75rem; margin-bottom: 2rem; }
+.wordmark {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 1.5rem; font-weight: 700; letter-spacing: -.02em;
+  color: var(--ink); text-decoration: none;
+}
+.wordmark .dot-l, .wordmark .dot-c {
+  display: inline-block; width: .45em; height: .45em; border-radius: 50%;
+  margin-left: .18em; vertical-align: baseline;
+}
+.wordmark .dot-l { background: var(--daylight); }
+.wordmark .dot-c { background: var(--flame); }
+.tagline { color: var(--muted); font-size: .85rem; }
+
+.lamp { display: flex; gap: .5rem; margin-bottom: .75rem; }
+.lamp input[type=search] {
+  flex: 1; min-width: 0;
+  padding: .6rem .8rem;
+  font: inherit; color: var(--ink);
+  background: var(--card);
+  border: 1px solid var(--line); border-radius: .5rem;
+}
+.lamp select {
+  padding: .6rem .5rem;
+  font: inherit; color: var(--ink);
+  background: var(--card);
+  border: 1px solid var(--line); border-radius: .5rem;
+}
+.lamp input:focus, .lamp select:focus, a:focus-visible {
+  outline: none;
+  border-color: var(--flame);
+  box-shadow: 0 0 0 4px var(--glow);
+}
+a:focus-visible { border-radius: .2rem; }
+
+.section-label {
+  font-size: .72rem; font-weight: 600; letter-spacing: .09em;
+  text-transform: uppercase; color: var(--muted);
+  margin: 1.75rem 0 .25rem;
+}
+
+.card { padding: .9rem 0; border-bottom: 1px solid var(--line); }
+.card-head { display: flex; align-items: baseline; gap: .6rem; flex-wrap: wrap; }
+.pkg-name {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-weight: 600; font-size: 1rem;
+  color: var(--ink); text-decoration: none;
+}
+.pkg-name:hover { text-decoration: underline; }
+.badge {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: .68rem; letter-spacing: .06em; text-transform: uppercase;
+  padding: .05rem .45rem; border-radius: 99px; border: 1px solid;
+}
+.badge.lumen { color: var(--daylight); border-color: var(--daylight); }
+.badge.candela { color: var(--flame); border-color: var(--flame); }
+.badge.other { color: var(--muted); border-color: var(--line); }
+.card p { margin: .25rem 0 0; color: var(--muted); }
+.byline { font-size: .8rem; color: var(--muted); }
+.byline a { color: inherit; }
+
+h1 {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 1.6rem; letter-spacing: -.02em; margin: 0 0 .25rem;
+  display: flex; align-items: center; gap: .6rem; flex-wrap: wrap;
+}
+.crumb { font-size: .85rem; margin-bottom: 1.5rem; }
+a { color: var(--flame); }
+.desc { margin: .5rem 0 0; }
+
+.release { display: flex; align-items: baseline; gap: .8rem; padding: .7rem 0; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.release .version { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-weight: 600; min-width: 5rem; }
+.release time { color: var(--muted); font-size: .85rem; }
+.release .rel-desc { color: var(--muted); flex: 1 1 12rem; }
+.release .dl { margin-left: auto; font-size: .85rem; white-space: nowrap; }
+
+.state { color: var(--muted); padding: 2rem 0; }
+@media (prefers-reduced-motion: no-preference) {
+  .lamp input, .lamp select { transition: box-shadow .15s ease, border-color .15s ease; }
+}
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <a class="wordmark" href="#/">lpm<span class="dot-l"></span><span class="dot-c"></span></a>
+    <span class="tagline">packages for Lumen and Candela</span>
+  </header>
+  <div id="view"></div>
+</main>
+<script>
+"use strict";
+const view = document.getElementById("view");
+
+function el(tag, cls, text) {
+  const n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (text !== undefined) n.textContent = text;
+  return n;
+}
+
+function day(iso) {
+  return iso ? iso.slice(0, 10) : "";
+}
+
+function badgeFor(platform) {
+  const p = (platform || "").toLowerCase();
+  const cls = p === "lumen" ? "lumen" : p === "candela" ? "candela" : "other";
+  return el("span", "badge " + cls, platform || "any");
+}
+
+async function fetchJSON(path) {
+  const res = await fetch(path, { headers: { Accept: "application/json" } });
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error("registry answered " + res.status);
+  return res.json();
+}
+
+function state(text) {
+  view.replaceChildren(el("p", "state", text));
+}
+
+function packageCard(pkg) {
+  const card = el("article", "card");
+  const head = el("div", "card-head");
+  const name = el("a", "pkg-name", pkg.name);
+  name.href = "#/p/" + encodeURIComponent(pkg.name);
+  head.append(name, badgeFor(pkg.platform));
+  if (pkg.releases && pkg.releases.length) {
+    head.append(el("span", "byline mono", pkg.releases[0].version));
+  }
+  card.append(head);
+  if (pkg.description) card.append(el("p", "", pkg.description));
+  if (pkg.publisher) {
+    const by = el("div", "byline");
+    by.append("published by ");
+    const who = el("a", "", pkg.publisher.username);
+    who.href = "#/u/" + encodeURIComponent(pkg.publisher.username);
+    by.append(who);
+    card.append(by);
+  }
+  return card;
+}
+
+function packageList(pkgs, emptyText) {
+  const wrap = el("div");
+  if (!pkgs || !pkgs.length) {
+    wrap.append(el("p", "state", emptyText));
+    return wrap;
+  }
+  for (const p of pkgs) wrap.append(packageCard(p));
+  return wrap;
+}
+
+let searchTimer;
+async function renderHome() {
+  const lamp = el("div", "lamp");
+  const input = el("input");
+  input.type = "search";
+  input.placeholder = "Search packages";
+  input.setAttribute("aria-label", "Search packages");
+  const select = el("select");
+  select.setAttribute("aria-label", "Platform");
+  for (const [value, label] of [["", "All platforms"], ["lumen", "Lumen"], ["candela", "Candela"]]) {
+    const opt = el("option", "", label);
+    opt.value = value;
+    select.append(opt);
+  }
+  const label = el("div", "section-label", "Newest packages");
+  const results = el("div");
+
+  async function search() {
+    const q = input.value.trim();
+    const params = new URLSearchParams();
+    if (q) params.set("q", q);
+    if (select.value) params.set("platform", select.value);
+    label.textContent = q || select.value ? "Results" : "Newest packages";
+    try {
+      const pkgs = await fetchJSON("/packages" + (params.size ? "?" + params : ""));
+      results.replaceChildren(packageList(pkgs, "No packages match that search."));
+    } catch {
+      results.replaceChildren(el("p", "state", "The registry did not respond. Retry in a moment."));
+    }
+  }
+
+  input.addEventListener("input", () => {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(search, 250);
+  });
+  select.addEventListener("change", search);
+
+  lamp.append(input, select);
+  view.replaceChildren(lamp, label, results);
+  input.focus({ preventScroll: true });
+  await search();
+}
+
+async function renderPackage(name) {
+  state("Looking up " + name + "…");
+  let pkg;
+  try {
+    pkg = await fetchJSON("/packages/" + encodeURIComponent(name));
+  } catch {
+    return state("The registry did not respond. Retry in a moment.");
+  }
+  if (!pkg) return state("No package is named " + name + ".");
+
+  const crumb = el("div", "crumb");
+  const back = el("a", "", "← all packages");
+  back.href = "#/";
+  crumb.append(back);
+
+  const h = el("h1");
+  h.append(document.createTextNode(pkg.name), badgeFor(pkg.platform));
+
+  const frag = document.createDocumentFragment();
+  frag.append(crumb, h);
+  if (pkg.description) frag.append(el("p", "desc", pkg.description));
+  if (pkg.publisher) {
+    const by = el("div", "byline");
+    by.append("published by ");
+    const who = el("a", "", pkg.publisher.username);
+    who.href = "#/u/" + encodeURIComponent(pkg.publisher.username);
+    by.append(who, document.createTextNode(" · since " + day(pkg.createdAt)));
+    frag.append(by);
+  }
+
+  frag.append(el("div", "section-label", "Releases"));
+  if (!pkg.releases || !pkg.releases.length) {
+    frag.append(el("p", "state", "No releases published yet."));
+  } else {
+    for (const r of pkg.releases) {
+      const row = el("div", "release");
+      row.append(el("span", "version", r.version));
+      const t = el("time", "", day(r.createdAt));
+      t.dateTime = r.createdAt || "";
+      row.append(t);
+      if (r.description) row.append(el("span", "rel-desc", r.description));
+      const dl = el("a", "dl", "download");
+      dl.href = r.url;
+      dl.rel = "noopener";
+      row.append(dl);
+      frag.append(row);
+    }
+  }
+  view.replaceChildren(frag);
+}
+
+async function renderUser(username) {
+  state("Looking up " + username + "…");
+  let user;
+  try {
+    user = await fetchJSON("/users/" + encodeURIComponent(username));
+  } catch {
+    return state("The registry did not respond. Retry in a moment.");
+  }
+  if (!user) return state("No user is named " + username + ".");
+
+  const crumb = el("div", "crumb");
+  const back = el("a", "", "← all packages");
+  back.href = "#/";
+  crumb.append(back);
+
+  const h = el("h1", "", user.username);
+  const since = el("div", "byline", "member since " + day(user.createdAt));
+
+  const frag = document.createDocumentFragment();
+  frag.append(crumb, h, since, el("div", "section-label", "Packages"));
+  frag.append(packageList(user.packages, "Nothing published yet."));
+  view.replaceChildren(frag);
+}
+
+function route() {
+  const hash = decodeURIComponent(location.hash);
+  const pkg = hash.match(/^#\/p\/(.+)$/);
+  if (pkg) return renderPackage(pkg[1]);
+  const user = hash.match(/^#\/u\/(.+)$/);
+  if (user) return renderUser(user[1]);
+  return renderHome();
+}
+
+addEventListener("hashchange", route);
+route();
+</script>
+</body>
+</html>

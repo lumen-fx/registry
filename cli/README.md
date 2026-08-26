@@ -5,6 +5,12 @@ Command-line client for the LPM package registry.
 ## Install
 
 ```sh
+curl -fsSL https://registry.lumenfx.dev/install.sh | sh
+```
+
+Or with Go:
+
+```sh
 go install github.com/lumen-fx/registry/cli@latest
 ```
 
