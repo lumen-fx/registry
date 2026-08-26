@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"lpm-server/migrations"
+	"github.com/lumen-fx/registry/server/migrations"
 
 	"github.com/golang-migrate/migrate/v4"
 	"github.com/golang-migrate/migrate/v4/source/iofs"

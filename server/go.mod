@@ -1,4 +1,4 @@
-module lpm-server
+module github.com/lumen-fx/registry/server
 
 go 1.26
 

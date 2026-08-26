@@ -52,7 +52,7 @@ spec:
               memory: 64Mi
       containers:
         - name: server
-          image: ghcr.io/lumen-fx/registry:latest
+          image: ghcr.io/lumen-fx/registry:main
           # The tag moves, and Kubernetes only defaults to Always for :latest.
           imagePullPolicy: Always
           ports:

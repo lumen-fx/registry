@@ -1,0 +1,92 @@
+# Daily update. The deployment tracks ghcr.io/lumen-fx/registry:main with
+# imagePullPolicy Always, so updating is: run the migrator from the newest
+# image, then restart the rollout so every pod re-pulls. When the tag has not
+# moved, the migration is a no-op and the restart swaps pods for identical
+# ones behind the Service; nothing user-visible happens.
+#
+# The migration Job is re-fetched from the repository rather than duplicated
+# here, so the base manifest stays the only definition of it.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: lpm-updater
+  namespace: lpm
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: lpm-updater
+  namespace: lpm
+rules:
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "watch", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: lpm-updater
+  namespace: lpm
+subjects:
+  - kind: ServiceAccount
+    name: lpm-updater
+    namespace: lpm
+roleRef:
+  kind: Role
+  name: lpm-updater
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: lpm-update
+  namespace: lpm
+spec:
+  schedule: "0 5 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 1800
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: lpm-server
+            app.kubernetes.io/component: update
+        spec:
+          serviceAccountName: lpm-updater
+          restartPolicy: Never
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: update
+              image: alpine/k8s:1.32.13
+              command:
+                - sh
+                - -ec
+                - |
+                  kubectl -n lpm delete job lpm-migrate --ignore-not-found
+                  curl -fsSL https://raw.githubusercontent.com/lumen-fx/registry/main/k8s/base/migration-job.yaml \
+                    | kubectl -n lpm apply -f -
+                  kubectl -n lpm wait --for=condition=complete job/lpm-migrate --timeout=600s
+                  kubectl -n lpm rollout restart deployment/lpm-server
+                  kubectl -n lpm rollout status deployment/lpm-server --timeout=600s
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
+                limits:
+                  memory: 128Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]

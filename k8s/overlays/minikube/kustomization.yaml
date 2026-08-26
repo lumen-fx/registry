@@ -4,7 +4,7 @@ kind: Kustomization
 # Local cluster. The image is built straight into minikube's daemon, so there
 # is nothing to pull and no registry involved:
 #
-#   minikube image build -t lpm-server:dev .
+#   minikube image build -t lpm-server:dev server/
 #   kubectl apply -k k8s/overlays/minikube
 resources:
   - ../../base

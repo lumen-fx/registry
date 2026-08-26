@@ -98,11 +98,14 @@ lpm-server
 # Dependency directories (remove the comment below to include it)
 # vendor/
 
-# Go workspace file
-go.work
-go.work.sum
 
 # env file
 .env
 
 .idea/
+# Build output
+cli/dist/
+cli/lpm
+cli/cli
+server/lpm-server
+server/server

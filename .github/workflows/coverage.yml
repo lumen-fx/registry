@@ -1,6 +1,6 @@
 name: coverage
 
-# Line coverage for the module, reported to Codecov. This is a report, not a
+# Line coverage for both modules, reported to Codecov. This is a report, not a
 # gate: ci.yml decides whether the suite passes, and codecov.yml decides what
 # Codecov grades.
 
@@ -52,10 +52,13 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version-file: go.mod
+          go-version-file: server/go.mod
 
       - name: Collect coverage
-        run: go test -covermode=atomic -coverprofile=coverage.out ./...
+        run: |
+          set -euo pipefail
+          (cd server && go test -covermode=atomic -coverprofile=coverage.out ./...)
+          (cd cli && go test -covermode=atomic -coverprofile=coverage.out ./...)
 
       # The upload is unconditional. codecov/patch is a required check, so a
       # run that uploads nothing leaves the check pending and the pull request
@@ -63,7 +66,7 @@ jobs:
       - name: Upload to Codecov
         uses: codecov/codecov-action@v7
         with:
-          files: coverage.out
+          files: server/coverage.out,cli/coverage.out
           use_oidc: true
           fail_ci_if_error: true
 
@@ -71,5 +74,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: coverage
-          path: coverage.out
+          path: |
+            server/coverage.out
+            cli/coverage.out
           if-no-files-found: error
