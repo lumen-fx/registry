@@ -54,33 +54,6 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # The registry's own install.sh reads the newest lpm release from the
-      # registry and fetches the matching binaries from the GitHub release the
-      # step above just published. Creating the package is only rejected with
-      # 409 after the first release, which is fine.
-      - name: Publish the release to the registry
-        env:
-          REGISTRY: https://registry.lumenfx.dev
-          REGISTRY_USERNAME: ${{ secrets.LPM_REGISTRY_USERNAME }}
-          REGISTRY_PASSWORD: ${{ secrets.LPM_REGISTRY_PASSWORD }}
-        run: |
-          set -euo pipefail
-          version="${GITHUB_REF_NAME#v}"
-          code=$(curl -sS -o /dev/null -w '%{http_code}' \
-            -u "$REGISTRY_USERNAME:$REGISTRY_PASSWORD" \
-            -H 'Content-Type: application/json' \
-            -d '{"platform":"cli","name":"lpm","description":"The lpm command-line client for the LPM package registry."}' \
-            "$REGISTRY/packages")
-          if [ "$code" != 201 ] && [ "$code" != 409 ]; then
-            echo "creating the lpm package failed with $code" >&2
-            exit 1
-          fi
-          curl -fsS \
-            -u "$REGISTRY_USERNAME:$REGISTRY_PASSWORD" \
-            -H 'Content-Type: application/json' \
-            -d "{\"url\":\"https://github.com/${GITHUB_REPOSITORY}/releases/tag/${GITHUB_REF_NAME}\",\"version\":\"${version}\"}" \
-            "$REGISTRY/packages/lpm/releases"
-
   snapshot:
     name: snapshot
     if: ${{ !startsWith(github.ref, 'refs/tags/v') }}

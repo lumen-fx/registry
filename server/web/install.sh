@@ -1,14 +1,12 @@
 #!/bin/sh
-# Installs the lpm CLI: asks this registry for the newest lpm release, then
-# downloads the binary for this platform from the matching GitHub release.
+# Installs the lpm CLI: asks GitHub for the newest release of the registry
+# repository, then downloads the binary for this platform from it.
 #
 #   curl -fsSL https://registry.lumenfx.dev/install.sh | sh
 #
-# LPM_REGISTRY overrides the registry, LPM_INSTALL_DIR the destination
-# (default ~/.local/bin).
+# LPM_INSTALL_DIR overrides the destination (default ~/.local/bin).
 set -eu
 
-registry="${LPM_REGISTRY:-https://registry.lumenfx.dev}"
 dir="${LPM_INSTALL_DIR:-$HOME/.local/bin}"
 
 case "$(uname -s)" in
@@ -30,10 +28,11 @@ case "$(uname -m)" in
     ;;
 esac
 
-version="$(curl -fsSL "$registry/packages/lpm/releases" \
-  | grep -o '"version":"[^"]*"' | head -n 1 | cut -d '"' -f 4)"
+tag="$(curl -fsSL https://api.github.com/repos/lumen-fx/registry/releases/latest \
+  | grep -o '"tag_name": *"[^"]*"' | head -n 1 | cut -d '"' -f 4)"
+version="${tag#v}"
 if [ -z "$version" ]; then
-  echo "the registry at $registry has no lpm release yet" >&2
+  echo "could not resolve the newest lpm release from GitHub" >&2
   exit 1
 fi
 
