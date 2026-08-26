@@ -114,3 +114,16 @@ func TestClientReportsNonJSONFailures(t *testing.T) {
 		t.Errorf("err = %v, want the status code", err)
 	}
 }
+
+func TestClientRequestBuildFailures(t *testing.T) {
+	c := testClient(t, "lpm_good")
+
+	// A channel cannot be encoded.
+	if err := c.do(http.MethodPost, "/packages", make(chan int), nil); err == nil {
+		t.Error("do encoded a channel")
+	}
+	// A method with a newline cannot become a request.
+	if err := c.do("bad\nmethod", "/packages", nil, nil); err == nil {
+		t.Error("do built a request from a broken method")
+	}
+}

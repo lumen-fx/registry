@@ -150,3 +150,54 @@ func TestCallbackStateChecks(t *testing.T) {
 		t.Errorf("missing code = %d, want 400", rec.Code)
 	}
 }
+
+// Provider failures during the callback stop before the database is touched,
+// so they need no pool.
+func TestCallbackProviderFailures(t *testing.T) {
+	newCallback := func(t *testing.T, handler http.HandlerFunc) *httptest.ResponseRecorder {
+		t.Helper()
+		provider := httptest.NewServer(handler)
+		t.Cleanup(provider.Close)
+
+		t.Setenv("GITHUB_CLIENT_ID", "id")
+		t.Setenv("GITHUB_CLIENT_SECRET", "secret")
+		t.Setenv("GITHUB_TOKEN_URL", provider.URL+"/token")
+		t.Setenv("GITHUB_USER_URL", provider.URL+"/user")
+		server := NewServer(nil)
+
+		req := httptest.NewRequest(http.MethodGet, "/auth/github/callback?code=x&state=s", nil)
+		req.AddCookie(&http.Cookie{Name: stateCookie, Value: "s"})
+		rec := httptest.NewRecorder()
+		server.Routes().ServeHTTP(rec, req)
+		return rec
+	}
+
+	exchangeDown := newCallback(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+	})
+	if exchangeDown.Code != http.StatusInternalServerError {
+		t.Errorf("exchange failure = %d, want 500", exchangeDown.Code)
+	}
+
+	userDown := newCallback(t, func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/token") {
+			fmt.Fprint(w, `{"access_token":"t"}`)
+			return
+		}
+		w.WriteHeader(http.StatusBadGateway)
+	})
+	if userDown.Code != http.StatusInternalServerError {
+		t.Errorf("user failure = %d, want 500", userDown.Code)
+	}
+
+	badLogin := newCallback(t, func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/token") {
+			fmt.Fprint(w, `{"access_token":"t"}`)
+			return
+		}
+		fmt.Fprint(w, `{"id":7,"login":"bad login!"}`)
+	})
+	if badLogin.Code != http.StatusBadGateway {
+		t.Errorf("unusable login = %d, want 502", badLogin.Code)
+	}
+}
