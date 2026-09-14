@@ -86,7 +86,7 @@ so no registry is involved:
 
 ```sh
 minikube start
-minikube image build -t lpm-server:dev server/
+minikube image build -t lpm-server:dev -f server/Dockerfile .
 kubectl apply -k k8s/overlays/minikube
 ```
 
