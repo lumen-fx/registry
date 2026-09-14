@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -73,6 +74,9 @@ func (c *Client) do(method, path string, in, out any) error {
 	return nil
 }
 
+// fieldLines appends the rejected fields to the registry's message. It stays
+// on one line: every lpm error is one line on stderr, so a caller reading the
+// output does not have to piece a message back together.
 func fieldLines(fields map[string]string) string {
 	if len(fields) == 0 {
 		return ""
@@ -83,11 +87,11 @@ func fieldLines(fields map[string]string) string {
 	}
 	sort.Strings(names)
 
-	var b strings.Builder
-	for _, name := range names {
-		fmt.Fprintf(&b, "\n  %s: %s", name, fields[name])
+	parts := make([]string, len(names))
+	for i, name := range names {
+		parts[i] = fmt.Sprintf("%s: %s", name, fields[name])
 	}
-	return b.String()
+	return " (" + strings.Join(parts, "; ") + ")"
 }
 
 // Me identifies the token's account.
@@ -107,4 +111,41 @@ func (c *Client) CreateRelease(packageName string, rel NewRelease) (Release, err
 	var created Release
 	err := c.do(http.MethodPost, "/packages/"+url.PathEscape(packageName)+"/releases", rel, &created)
 	return created, err
+}
+
+// GetPackage reads one package with every release it has published. This is
+// what resolution runs on: one request per package name, not one per version.
+func (c *Client) GetPackage(name string) (Package, error) {
+	var pkg Package
+	err := c.do(http.MethodGet, "/packages/"+url.PathEscape(name), nil, &pkg)
+	return pkg, err
+}
+
+// SearchPackages lists packages matching the filter. An empty filter lists
+// the newest.
+func (c *Client) SearchPackages(filter PackageFilter) ([]Package, error) {
+	query := url.Values{}
+	for key, value := range map[string]string{
+		"platform": filter.Platform,
+		"name":     filter.Name,
+		"q":        filter.Search,
+		"username": filter.Username,
+		"version":  filter.Version,
+	} {
+		if value != "" {
+			query.Set(key, value)
+		}
+	}
+	if filter.Limit > 0 {
+		query.Set("limit", strconv.Itoa(filter.Limit))
+	}
+
+	path := "/packages"
+	if encoded := query.Encode(); encoded != "" {
+		path += "?" + encoded
+	}
+
+	var packages []Package
+	err := c.do(http.MethodGet, path, nil, &packages)
+	return packages, err
 }
