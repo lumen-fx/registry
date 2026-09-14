@@ -3,6 +3,7 @@ package src
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -46,8 +47,8 @@ func TestDatabaseFailuresAnswer500(t *testing.T) {
 		{http.MethodGet, "/tokens", "", true, http.StatusInternalServerError},
 		{http.MethodPost, "/tokens", `{"name":"ci"}`, true, http.StatusInternalServerError},
 		{http.MethodDelete, "/tokens/11111111-1111-1111-1111-111111111111", "", true, http.StatusInternalServerError},
-		{http.MethodPost, "/packages", `{"platform":"linux","name":"alice-tool"}`, true, http.StatusInternalServerError},
-		{http.MethodPost, "/packages/alice-tool/releases", `{"url":"https://example.test/x.tgz","version":"1.0.0"}`, true, http.StatusInternalServerError},
+		{http.MethodPost, "/packages", `{"platform":"lumen","name":"alice-tool"}`, true, http.StatusInternalServerError},
+		{http.MethodPost, "/packages/alice-tool/releases", `{"version":"1.0.0","artifacts":[{"target":"any","url":"https://example.test/x.tgz","sha256":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","size":4}]}`, true, http.StatusInternalServerError},
 	} {
 		var body *strings.Reader
 		if c.body == "" {
@@ -128,10 +129,10 @@ func TestStoreFailuresAreWrapped(t *testing.T) {
 	_, err = s.getRelease(ctx, "alice-tool", "1.0.0")
 	add("getRelease", err)
 
-	_, err = s.publishPackage(ctx, publisher, NewPackage{Platform: "linux", Name: "alice-tool"})
+	_, err = s.publishPackage(ctx, publisher, NewPackage{Platform: "lumen", Name: "alice-tool"})
 	add("publishPackage", err)
 
-	_, err = s.publishRelease(ctx, publisher, packaged, NewRelease{URL: "https://example.test/x.tgz", Version: "1.0.0"})
+	_, err = s.publishRelease(ctx, publisher, packaged, NewRelease{Version: "1.0.0"})
 	add("publishRelease", err)
 
 	for _, c := range calls {
@@ -173,7 +174,7 @@ func TestPublishReleaseRejectsAnotherPublisher(t *testing.T) {
 	packaged := Package{PublisherID: uuid.MustParse("22222222-2222-2222-2222-222222222222")}
 
 	_, err := s.publishRelease(context.Background(), publisher, packaged,
-		NewRelease{URL: "https://example.test/x.tgz", Version: "1.0.0"})
+		NewRelease{Version: "1.0.0"})
 
 	if !errors.Is(err, ErrNotPublisher) {
 		t.Errorf("err = %v, want ErrNotPublisher", err)
@@ -385,20 +386,72 @@ func TestValidationLengthLimits(t *testing.T) {
 	}
 
 	rel := NewRelease{
-		URL:         "https://example.test/" + long(releaseURLMaxLen),
-		Version:     long(versionMaxLen + 1),
-		Description: long(descriptionMaxLen + 1),
+		Version:      long(versionMaxLen + 1),
+		Description:  long(descriptionMaxLen + 1),
+		Dependencies: Requirements{"geom": long(requirementMaxLen + 1)},
+		Requires:     Requirements{long(packageNameMaxLen + 1): "^1"},
+		Artifacts: []NewArtifact{{
+			Target: "any",
+			URL:    "https://example.test/" + long(releaseURLMaxLen),
+			SHA256: long(64),
+			Size:   4,
+		}},
 	}
-	for _, field := range []string{"url", "version", "description"} {
-		if _, ok := rel.Validate()[field]; !ok {
+	relFields := rel.Validate()
+	for _, field := range []string{
+		"version",
+		"description",
+		"artifacts[0].url",
+		"dependencies.geom",
+		"requires." + long(packageNameMaxLen+1),
+	} {
+		if _, ok := relFields[field]; !ok {
 			t.Errorf("NewRelease.Validate did not reject a long %s", field)
 		}
 	}
 
 	// An unparseable URL is a field error, not a panic.
-	broken := NewRelease{URL: "https://example.test/%zz", Version: "1.0.0"}
-	if _, ok := broken.Validate()["url"]; !ok {
+	broken := NewRelease{
+		Version:   "1.0.0",
+		Artifacts: []NewArtifact{{Target: "any", URL: "https://example.test/%zz", SHA256: long(64), Size: 4}},
+	}
+	if _, ok := broken.Validate()["artifacts[0].url"]; !ok {
 		t.Error("NewRelease.Validate accepted an unparseable url")
+	}
+
+	// A requirement that does not parse names its own field, and the bare
+	// `1.2` a package author writes is a caret requirement, not a range that
+	// stops at 1.3.
+	syntax := NewRelease{
+		Version:      "1.0.0",
+		Dependencies: Requirements{"geom": "newest please", "shapes": " 1.2 "},
+		Requires:     Requirements{"lumenc": ">="},
+		Artifacts:    []NewArtifact{{Target: "any", URL: "https://example.test/x.tgz", SHA256: long(64), Size: 4}},
+	}
+	syntaxFields := syntax.Validate()
+	for _, field := range []string{"dependencies.geom", "requires.lumenc"} {
+		if _, ok := syntaxFields[field]; !ok {
+			t.Errorf("NewRelease.Validate accepted an unreadable %s", field)
+		}
+	}
+	if _, ok := syntaxFields["dependencies.shapes"]; ok {
+		t.Errorf("NewRelease.Validate rejected a bare requirement: %v", syntaxFields)
+	}
+	if syntax.Dependencies["shapes"] != "1.2" {
+		t.Errorf("dependencies = %v, want the requirement trimmed and stored as written", syntax.Dependencies)
+	}
+
+	// Over a cap is one error on the map or the list, not one per entry.
+	crowded := NewRelease{Version: "1.0.0", Dependencies: Requirements{}}
+	for i := range requirementsMax + 1 {
+		crowded.Dependencies[fmt.Sprintf("dep%d", i)] = "^1"
+	}
+	crowded.Artifacts = make([]NewArtifact, artifactsMax+1)
+	crowdedFields := crowded.Validate()
+	for _, field := range []string{"dependencies", "artifacts"} {
+		if _, ok := crowdedFields[field]; !ok {
+			t.Errorf("NewRelease.Validate accepted more %s than the cap", field)
+		}
 	}
 
 	filter := PackageFilter{Platform: long(filterValueMaxLen + 1), Version: long(filterValueMaxLen + 1)}

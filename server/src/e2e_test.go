@@ -263,7 +263,7 @@ func (a *api) signup(login string) account {
 func (a *api) publish(token, name string) Package {
 	a.t.Helper()
 
-	body := fmt.Sprintf(`{"platform":"linux","name":%q,"description":"a tool"}`, name)
+	body := fmt.Sprintf(`{"platform":"lumen","name":%q,"description":"a tool"}`, name)
 	res := a.expect(http.StatusCreated, http.MethodPost, "/packages", body, token)
 
 	var pkg Package
@@ -271,11 +271,18 @@ func (a *api) publish(token, name string) Package {
 	return pkg
 }
 
-// release publishes one version of a package.
+// A stand-in digest: 64 lowercase hex characters, which is all the registry
+// checks. Hashing the bytes against it is the client's job.
+const testSHA256 = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
+// release publishes one version of a package, carrying the one artifact that
+// runs everywhere.
 func (a *api) release(token, name, version string) Release {
 	a.t.Helper()
 
-	body := fmt.Sprintf(`{"url":"https://example.test/%s-%s.tgz","version":%q}`, name, version, version)
+	body := fmt.Sprintf(
+		`{"version":%q,"artifacts":[{"target":"any","url":"https://example.test/%s-%s.tgz","sha256":%q,"size":1024}]}`,
+		version, name, version, testSHA256)
 	res := a.expect(http.StatusCreated, http.MethodPost, "/packages/"+name+"/releases", body, token)
 
 	var rel Release
@@ -540,25 +547,25 @@ func TestE2EPublishPackage(t *testing.T) {
 
 	// No credentials, and a challenge on the 401.
 	res := a.expect(http.StatusUnauthorized, http.MethodPost, "/packages",
-		`{"platform":"linux","name":"nope"}`)
+		`{"platform":"lumen","name":"nope"}`)
 	if res.header.Get("WWW-Authenticate") == "" {
 		t.Error("401 carried no WWW-Authenticate challenge")
 	}
 
 	// A session is a browser credential; publishing wants a token.
-	if got := a.do(http.MethodPost, "/packages", `{"platform":"linux","name":"nope"}`, "", acct.Session); got.status != http.StatusUnauthorized {
+	if got := a.do(http.MethodPost, "/packages", `{"platform":"lumen","name":"nope"}`, "", acct.Session); got.status != http.StatusUnauthorized {
 		t.Errorf("session publish = %d, want 401", got.status)
 	}
 
 	// A name is taken globally, not per platform.
 	a.expect(http.StatusConflict, http.MethodPost, "/packages",
-		`{"platform":"darwin","name":"alice-tool"}`, acct.Token)
+		`{"platform":"candela","name":"alice-tool"}`, acct.Token)
 
 	for _, body := range []string{
 		`{"platform":"","name":"valid-name"}`,
-		`{"platform":"linux","name":""}`,
-		`{"platform":"linux","name":"bad name"}`,
-		`{"platform":"linux","name":"-leading-dash"}`,
+		`{"platform":"lumen","name":""}`,
+		`{"platform":"lumen","name":"bad name"}`,
+		`{"platform":"lumen","name":"-leading-dash"}`,
 	} {
 		a.expect(http.StatusUnprocessableEntity, http.MethodPost, "/packages", body, acct.Token)
 	}
@@ -569,7 +576,7 @@ func TestE2EWrongTokenCannotPublish(t *testing.T) {
 	a.signup("alice")
 
 	a.expect(http.StatusUnauthorized, http.MethodPost, "/packages",
-		`{"platform":"linux","name":"alice-tool"}`, "lpm_not-a-real-token")
+		`{"platform":"lumen","name":"alice-tool"}`, "lpm_bad-token")
 }
 
 func TestE2EGetPackage(t *testing.T) {
@@ -603,8 +610,8 @@ func TestE2EPackageReleases(t *testing.T) {
 	res := a.expect(http.StatusOK, http.MethodGet, "/packages/alice-tool/releases", "")
 	var releases []Release
 	res.json(t, &releases)
-	if len(releases) != 1 || releases[0].URL == "" {
-		t.Errorf("releases = %+v, want one with a url", releases)
+	if len(releases) != 1 || len(releases[0].Artifacts) != 1 || releases[0].Artifacts[0].URL == "" {
+		t.Errorf("releases = %+v, want one carrying one artifact with a url", releases)
 	}
 
 	res = a.expect(http.StatusOK, http.MethodGet, "/packages/alice-empty/releases", "")
@@ -625,31 +632,87 @@ func TestE2EPublishRelease(t *testing.T) {
 	if rel.Version != "1.0.0" || rel.CreatedAt.IsZero() {
 		t.Errorf("release = %+v, want a filled record", rel)
 	}
+	if len(rel.Dependencies) != 0 || len(rel.Requires) != 0 {
+		t.Errorf("release = %+v, want empty requirement maps", rel)
+	}
 
-	// A version that is wider than semver still round-trips through the path.
-	const odd = "v2.0.0-rc.1+build.5"
+	// A pre-release with build metadata is semver, and round-trips through
+	// the path.
+	const odd = "2.0.0-rc.1+build.5"
 	a.release(alice.Token, "alice-tool", odd)
 	a.expect(http.StatusOK, http.MethodGet, "/packages/alice-tool/releases/"+odd, "")
 
-	body := `{"url":"https://example.test/x.tgz","version":"3.0.0"}`
+	// Several targets, dependencies, and requires all come back as stored,
+	// with the artifacts ordered by target.
+	a.expect(http.StatusCreated, http.MethodPost, "/packages/alice-tool/releases",
+		`{"version":"4.0.0","dependencies":{"geom":"^0.3"},"requires":{"lumenc":">=0.2, <1"},"artifacts":[`+
+			`{"target":"macos-aarch64","url":"https://example.test/m.tgz","sha256":"`+testSHA256+`","size":7},`+
+			`{"target":"linux-x86_64","url":"https://example.test/l.tgz","sha256":"`+testSHA256+`","size":9}]}`,
+		alice.Token)
+
+	var full Release
+	a.expect(http.StatusOK, http.MethodGet, "/packages/alice-tool/releases/4.0.0", "").json(t, &full)
+	if full.Dependencies["geom"] != "^0.3" || full.Requires["lumenc"] != ">=0.2, <1" {
+		t.Errorf("release = %+v, want the requirements it was published with", full)
+	}
+	if len(full.Artifacts) != 2 ||
+		full.Artifacts[0].Target != "linux-x86_64" || full.Artifacts[0].Size != 9 ||
+		full.Artifacts[1].Target != "macos-aarch64" {
+		t.Errorf("artifacts = %+v, want both targets ordered by name", full.Artifacts)
+	}
+
+	body := `{"version":"3.0.0","artifacts":[{"target":"any","url":"https://example.test/x.tgz","sha256":"` +
+		testSHA256 + `","size":4}]}`
 	a.expect(http.StatusUnauthorized, http.MethodPost, "/packages/alice-tool/releases", body)
 	a.expect(http.StatusForbidden, http.MethodPost, "/packages/alice-tool/releases", body, bob.Token)
 	a.expect(http.StatusNotFound, http.MethodPost, "/packages/nothing-here/releases", body, alice.Token)
 	a.expect(http.StatusConflict, http.MethodPost, "/packages/alice-tool/releases",
-		`{"url":"https://example.test/again.tgz","version":"1.0.0"}`, alice.Token)
+		`{"version":"1.0.0","artifacts":[{"target":"any","url":"https://example.test/again.tgz","sha256":"`+
+			testSHA256+`","size":4}]}`, alice.Token)
 
+	// A rejected release leaves nothing behind, so the version is still free.
+	a.expect(http.StatusUnprocessableEntity, http.MethodPost, "/packages/alice-tool/releases",
+		`{"version":"5.0.0","artifacts":[{"target":"any","url":"https://example.test/a.tgz","sha256":"`+
+			testSHA256+`","size":4},{"target":"any","url":"https://example.test/b.tgz","sha256":"`+
+			testSHA256+`","size":4}]}`, alice.Token)
+	a.expect(http.StatusNotFound, http.MethodGet, "/packages/alice-tool/releases/5.0.0", "")
+
+	artifact := func(fields string) string {
+		return `{"version":"9.0.0","artifacts":[{` + fields + `}]}`
+	}
 	for _, invalid := range []string{
-		`{"url":"","version":"9.0.0"}`,
-		`{"url":"http://example.test/x.tgz","version":"9.0.0"}`,
-		`{"url":"https://user:pass@example.test/x.tgz","version":"9.0.0"}`,
-		`{"url":"https://example.test/x.tgz#frag","version":"9.0.0"}`,
-		`{"url":"file:///etc/passwd","version":"9.0.0"}`,
-		`{"url":"https:///x.tgz","version":"9.0.0"}`,
-		`{"url":"https://example.test/x.tgz","version":""}`,
-		`{"url":"https://example.test/x.tgz","version":"9 0 0"}`,
+		`{"version":"9.0.0","artifacts":[]}`,
+		`{"version":"9.0.0"}`,
+		`{"version":"","artifacts":[{"target":"any","url":"https://example.test/x.tgz","sha256":"` + testSHA256 + `","size":4}]}`,
+		`{"version":"9 0 0","artifacts":[{"target":"any","url":"https://example.test/x.tgz","sha256":"` + testSHA256 + `","size":4}]}`,
+		`{"version":"v9.0.0","artifacts":[{"target":"any","url":"https://example.test/x.tgz","sha256":"` + testSHA256 + `","size":4}]}`,
+		`{"version":"9.0","artifacts":[{"target":"any","url":"https://example.test/x.tgz","sha256":"` + testSHA256 + `","size":4}]}`,
+		`{"version":"9.0.0","dependencies":{"bad name":"^1"},"artifacts":[{"target":"any","url":"https://example.test/x.tgz","sha256":"` + testSHA256 + `","size":4}]}`,
+		`{"version":"9.0.0","requires":{"lumenc":""},"artifacts":[{"target":"any","url":"https://example.test/x.tgz","sha256":"` + testSHA256 + `","size":4}]}`,
+		// A requirement no client could resolve never reaches the database.
+		`{"version":"9.0.0","dependencies":{"geom":"newest please"},"artifacts":[{"target":"any","url":"https://example.test/x.tgz","sha256":"` + testSHA256 + `","size":4}]}`,
+		`{"version":"9.0.0","requires":{"lumenc":">="},"artifacts":[{"target":"any","url":"https://example.test/x.tgz","sha256":"` + testSHA256 + `","size":4}]}`,
+		artifact(`"target":"","url":"https://example.test/x.tgz","sha256":"` + testSHA256 + `","size":4`),
+		artifact(`"target":"solaris-sparc","url":"https://example.test/x.tgz","sha256":"` + testSHA256 + `","size":4`),
+		artifact(`"target":"any","url":"","sha256":"` + testSHA256 + `","size":4`),
+		artifact(`"target":"any","url":"http://example.test/x.tgz","sha256":"` + testSHA256 + `","size":4`),
+		artifact(`"target":"any","url":"https://user:pass@example.test/x.tgz","sha256":"` + testSHA256 + `","size":4`),
+		artifact(`"target":"any","url":"https://example.test/x.tgz#frag","sha256":"` + testSHA256 + `","size":4`),
+		artifact(`"target":"any","url":"file:///etc/passwd","sha256":"` + testSHA256 + `","size":4`),
+		artifact(`"target":"any","url":"https:///x.tgz","sha256":"` + testSHA256 + `","size":4`),
+		artifact(`"target":"any","url":"https://example.test/x.tgz","sha256":"","size":4`),
+		artifact(`"target":"any","url":"https://example.test/x.tgz","sha256":"abc","size":4`),
+		artifact(`"target":"any","url":"https://example.test/x.tgz","sha256":"` + strings.ToUpper(testSHA256) + `","size":4`),
+		artifact(`"target":"any","url":"https://example.test/x.tgz","sha256":"` + testSHA256 + `","size":0`),
+		artifact(`"target":"any","url":"https://example.test/x.tgz","sha256":"` + testSHA256 + `","size":-1`),
 	} {
-		a.expect(http.StatusUnprocessableEntity, http.MethodPost,
+		res := a.expect(http.StatusUnprocessableEntity, http.MethodPost,
 			"/packages/alice-tool/releases", invalid, alice.Token)
+		var errRes ErrorResponse
+		res.json(t, &errRes)
+		if len(errRes.Fields) == 0 {
+			t.Errorf("%s named no fields", invalid)
+		}
 	}
 }
 
@@ -662,8 +725,8 @@ func TestE2EGetRelease(t *testing.T) {
 	res := a.expect(http.StatusOK, http.MethodGet, "/packages/alice-tool/releases/1.0.0", "")
 	var rel Release
 	res.json(t, &rel)
-	if rel.Version != "1.0.0" || rel.URL == "" {
-		t.Errorf("release = %+v, want 1.0.0 with a url", rel)
+	if rel.Version != "1.0.0" || len(rel.Artifacts) != 1 {
+		t.Errorf("release = %+v, want 1.0.0 with one artifact", rel)
 	}
 
 	// The two 404s are told apart.
@@ -683,7 +746,7 @@ func TestE2ESearchPackages(t *testing.T) {
 	a.publish(alice.Token, "alice-tool")
 	a.release(alice.Token, "alice-tool", "1.0.0")
 
-	body := `{"platform":"darwin","name":"bob-kit","description":"a widget"}`
+	body := `{"platform":"candela","name":"bob-kit","description":"a widget"}`
 	a.expect(http.StatusCreated, http.MethodPost, "/packages", body, bob.Token)
 
 	names := func(query string) []string {
@@ -705,7 +768,7 @@ func TestE2ESearchPackages(t *testing.T) {
 		want  []string
 	}{
 		{"", []string{"bob-kit", "alice-tool"}}, // no filter: newest first
-		{"?platform=linux", []string{"alice-tool"}},
+		{"?platform=lumen", []string{"alice-tool"}},
 		{"?platform=windows", []string{}},
 		{"?name=tool", []string{"alice-tool"}},
 		{"?q=widget", []string{"bob-kit"}},
@@ -714,7 +777,7 @@ func TestE2ESearchPackages(t *testing.T) {
 		{"?version=1.0.0", []string{"alice-tool"}},
 		{"?version=9.9.9", []string{}},
 		{"?limit=1", []string{"bob-kit"}},
-		{"?platform=linux&q=tool", []string{"alice-tool"}},
+		{"?platform=lumen&q=tool", []string{"alice-tool"}},
 		{"?name=%20tool%20", []string{"alice-tool"}}, // trimmed
 		{"?q=" + strings.Repeat("z", 200), []string{}},
 	} {

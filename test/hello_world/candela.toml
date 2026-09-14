@@ -1,0 +1,4 @@
+[package]
+name = "hello_world"
+version = "0.1.0"
+description = "The smallest candela library: one function that prints a greeting"

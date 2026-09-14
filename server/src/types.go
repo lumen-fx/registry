@@ -62,13 +62,31 @@ type CreatedToken struct {
 	Secret string `json:"token"`
 }
 
+// Requirements maps a name to a version requirement: a package name for
+// dependencies, a host name for requires. The registry stores the strings and
+// the client resolves them.
+type Requirements map[string]string
+
+// Artifact is one downloadable build of a release. The publisher hosts the
+// bytes; the registry records where they are and what they must hash to.
+type Artifact struct {
+	ID        uuid.UUID `json:"-" db:"id"`
+	ReleaseID uuid.UUID `json:"-" db:"release_id"`
+	Target    string    `json:"target" db:"target"`
+	URL       string    `json:"url" db:"url"`
+	SHA256    string    `json:"sha256" db:"sha256"`
+	Size      int64     `json:"size" db:"size"`
+}
+
 type Release struct {
-	ID          uuid.UUID `json:"id" db:"id"`
-	PackageID   uuid.UUID `json:"-" db:"package_id"`
-	URL         string    `json:"url" db:"url"`
-	Version     string    `json:"version" db:"version"`
-	Description string    `json:"description" db:"description"`
-	CreatedAt   time.Time `json:"createdAt" db:"created_at"`
+	ID           uuid.UUID    `json:"id" db:"id"`
+	PackageID    uuid.UUID    `json:"-" db:"package_id"`
+	Version      string       `json:"version" db:"version"`
+	Description  string       `json:"description" db:"description"`
+	Dependencies Requirements `json:"dependencies" db:"dependencies"`
+	Requires     Requirements `json:"requires" db:"requires"`
+	Artifacts    []Artifact   `json:"artifacts" db:"-"`
+	CreatedAt    time.Time    `json:"createdAt" db:"created_at"`
 }
 
 // PackageFilter combines set fields with AND.
@@ -98,9 +116,18 @@ type NewPackage struct {
 	Description string `json:"description" db:"description"`
 }
 
+type NewArtifact struct {
+	Target string `json:"target"`
+	URL    string `json:"url"`
+	SHA256 string `json:"sha256"`
+	Size   int64  `json:"size"`
+}
+
 // Package comes from the path, publisher from credentials.
 type NewRelease struct {
-	URL         string `json:"url" db:"url"`
-	Version     string `json:"version" db:"version"`
-	Description string `json:"description" db:"description"`
+	Version      string        `json:"version"`
+	Description  string        `json:"description"`
+	Dependencies Requirements  `json:"dependencies"`
+	Requires     Requirements  `json:"requires"`
+	Artifacts    []NewArtifact `json:"artifacts"`
 }
