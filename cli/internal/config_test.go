@@ -26,8 +26,11 @@ func TestConfigRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded != saved {
+	if loaded.Registry != saved.Registry || loaded.Token != saved.Token {
 		t.Errorf("loaded = %+v, want %+v", loaded, saved)
+	}
+	if !loaded.saved {
+		t.Error("a config read from disk did not report itself saved")
 	}
 
 	if err := DeleteConfig(); err != nil {
@@ -95,5 +98,50 @@ func TestConfigErrors(t *testing.T) {
 	}
 	if err := DeleteConfig(); err == nil {
 		t.Error("DeleteConfig removed a non-empty directory")
+	}
+}
+
+func TestResolveRegistryPrefersTheFlagThenTheConfig(t *testing.T) {
+	t.Setenv("LPM_CONFIG_DIR", t.TempDir())
+	t.Setenv("LPM_REGISTRY", "")
+
+	// Nothing saved and nothing in the environment: the default.
+	got, err := ResolveRegistry("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != DefaultRegistry {
+		t.Errorf("registry = %q, want %q", got, DefaultRegistry)
+	}
+
+	// The environment is next, while nothing is saved.
+	t.Setenv("LPM_REGISTRY", "https://env.example.test/")
+	if got, _ := ResolveRegistry(""); got != "https://env.example.test" {
+		t.Errorf("registry = %q, want the environment's, without its slash", got)
+	}
+
+	// What login saved outranks the environment.
+	if err := SaveConfig(Config{Registry: "https://saved.example.test", Token: "lpm_x"}); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := ResolveRegistry(""); got != "https://saved.example.test" {
+		t.Errorf("registry = %q, want the saved one", got)
+	}
+
+	// And the flag outranks everything.
+	if got, _ := ResolveRegistry("https://flag.example.test/"); got != "https://flag.example.test" {
+		t.Errorf("registry = %q, want the flag's", got)
+	}
+}
+
+func TestResolveRegistryReportsABrokenConfig(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("LPM_CONFIG_DIR", dir)
+	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte("not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := ResolveRegistry(""); err == nil {
+		t.Error("ResolveRegistry accepted a config that is not JSON")
 	}
 }

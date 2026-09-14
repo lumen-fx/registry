@@ -41,11 +41,26 @@ func fakeRegistry(t *testing.T) *httptest.Server {
 			return
 		}
 		w.WriteHeader(http.StatusCreated)
-		fmt.Fprint(w, `{"id":"33333333-3333-3333-3333-333333333333","url":"https://example.test/l.tgz","version":"1.0.0"}`)
+		fmt.Fprint(w, `{"id":"33333333-3333-3333-3333-333333333333","version":"1.0.0","artifacts":[{"target":"any","url":"https://example.test/l.tgz","sha256":"aaaa","size":4}]}`)
 	})
 	mux.HandleFunc("POST /packages/broken/releases", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusUnprocessableEntity)
-		fmt.Fprint(w, `{"error":"request contains invalid fields","fields":{"url":"must use https","version":"is required"}}`)
+		fmt.Fprint(w, `{"error":"request contains invalid fields","fields":{"artifacts[0].url":"must use https","version":"is required"}}`)
+	})
+	mux.HandleFunc("GET /packages/lantern", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"id":"22222222-2222-2222-2222-222222222222","platform":"lumen","name":"lantern",`+
+			`"releases":[{"version":"1.0.0","dependencies":{"wick":"^2"},"requires":{"lumenc":">=0.2"},`+
+			`"artifacts":[{"target":"any","url":"https://example.test/l.tgz","sha256":"abcd","size":4}]}]}`)
+	})
+	mux.HandleFunc("GET /packages/absent", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		fmt.Fprint(w, `{"error":"package doesn't exist"}`)
+	})
+	// Echoes the query back as a description, so a test can assert on what
+	// the client asked for.
+	mux.HandleFunc("GET /packages", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, `[{"name":"lantern","platform":"lumen","description":%q,"releases":[]}]`,
+			r.URL.RawQuery)
 	})
 	mux.HandleFunc("POST /packages/dead/releases", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadGateway)
@@ -87,7 +102,15 @@ func TestClientCreatePackageAndRelease(t *testing.T) {
 		t.Errorf("package = %+v, want lantern", pkg)
 	}
 
-	rel, err := c.CreateRelease("lantern", NewRelease{URL: "https://example.test/l.tgz", Version: "1.0.0"})
+	rel, err := c.CreateRelease("lantern", NewRelease{
+		Version: "1.0.0",
+		Artifacts: []Artifact{{
+			Target: AnyTarget,
+			URL:    "https://example.test/l.tgz",
+			SHA256: strings.Repeat("a", 64),
+			Size:   4,
+		}},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,7 +124,7 @@ func TestClientReportsFieldErrors(t *testing.T) {
 	if err == nil {
 		t.Fatal("want an error")
 	}
-	for _, part := range []string{"invalid fields", "url: must use https", "version: is required"} {
+	for _, part := range []string{"invalid fields", "artifacts[0].url: must use https", "version: is required"} {
 		if !strings.Contains(err.Error(), part) {
 			t.Errorf("err = %q, want it to contain %q", err, part)
 		}
@@ -125,5 +148,61 @@ func TestClientRequestBuildFailures(t *testing.T) {
 	// A method with a newline cannot become a request.
 	if err := c.do("bad\nmethod", "/packages", nil, nil); err == nil {
 		t.Error("do built a request from a broken method")
+	}
+}
+
+func TestClientGetPackage(t *testing.T) {
+	c := testClient(t, "lpm_good")
+
+	pkg, err := c.GetPackage("lantern")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pkg.Name != "lantern" || pkg.Platform != "lumen" || len(pkg.Releases) != 1 {
+		t.Fatalf("package = %+v, want lantern with one release", pkg)
+	}
+
+	release := pkg.Releases[0]
+	if release.Dependencies["wick"] != "^2" || release.Requires["lumenc"] != ">=0.2" {
+		t.Errorf("release = %+v, want its requirements decoded", release)
+	}
+	if len(release.Artifacts) != 1 || release.Artifacts[0].Target != AnyTarget ||
+		release.Artifacts[0].Size != 4 {
+		t.Errorf("artifacts = %+v, want the any artifact decoded", release.Artifacts)
+	}
+
+	if _, err := c.GetPackage("absent"); err == nil ||
+		!strings.Contains(err.Error(), "doesn't exist") {
+		t.Errorf("GetPackage(absent) = %v, want the registry's message", err)
+	}
+}
+
+func TestClientSearchPackagesSendsTheFilter(t *testing.T) {
+	c := testClient(t, "lpm_good")
+
+	packages, err := c.SearchPackages(PackageFilter{
+		Search: "lamp", Platform: "lumen", Name: "lantern",
+		Username: "ada", Version: "1.0.0", Limit: 7,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(packages) != 1 {
+		t.Fatalf("packages = %+v, want one", packages)
+	}
+	for _, want := range []string{"q=lamp", "platform=lumen", "name=lantern",
+		"username=ada", "version=1.0.0", "limit=7"} {
+		if !strings.Contains(packages[0].Description, want) {
+			t.Errorf("query = %q, want it to carry %q", packages[0].Description, want)
+		}
+	}
+
+	// An empty filter asks for no query string at all.
+	packages, err = c.SearchPackages(PackageFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if packages[0].Description != "" {
+		t.Errorf("query = %q, want none", packages[0].Description)
 	}
 }

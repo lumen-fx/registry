@@ -41,13 +41,43 @@ func (u *User) Public() PublicUser {
 	return PublicUser{ID: u.ID, Username: u.Username, CreatedAt: u.CreatedAt, Packages: u.Packages}
 }
 
+// Requirements maps a name to a version requirement: a package name for
+// dependencies, a host name for requires.
+type Requirements map[string]string
+
+// Artifact is one downloadable build of a release. The publisher hosts the
+// bytes; the registry records where they are and what they must hash to.
+type Artifact struct {
+	Target string `json:"target"`
+	URL    string `json:"url"`
+	SHA256 string `json:"sha256"`
+	Size   int64  `json:"size"`
+}
+
 type Release struct {
-	ID          uuid.UUID `json:"id" db:"id"`
-	PackageID   uuid.UUID `json:"-" db:"package_id"`
-	URL         string    `json:"url" db:"url"`
-	Version     string    `json:"version" db:"version"`
-	Description string    `json:"description" db:"description"`
-	CreatedAt   time.Time `json:"createdAt" db:"created_at"`
+	ID           uuid.UUID    `json:"id"`
+	Version      string       `json:"version"`
+	Description  string       `json:"description"`
+	Dependencies Requirements `json:"dependencies"`
+	Requires     Requirements `json:"requires"`
+	Artifacts    []Artifact   `json:"artifacts"`
+	CreatedAt    time.Time    `json:"createdAt"`
+}
+
+// Pick returns the artifact to install for target, preferring an exact match
+// over the one that runs anywhere.
+func (r Release) Pick(target string) (Artifact, bool) {
+	var fallback Artifact
+	var found bool
+	for _, a := range r.Artifacts {
+		switch a.Target {
+		case target:
+			return a, true
+		case AnyTarget:
+			fallback, found = a, true
+		}
+	}
+	return fallback, found
 }
 
 // PackageFilter combines set fields with AND.
@@ -61,27 +91,28 @@ type PackageFilter struct {
 }
 
 type Package struct {
-	ID          uuid.UUID   `json:"id" db:"id"`
-	PublisherID uuid.UUID   `json:"-" db:"publisher_id"`
-	Platform    string      `json:"platform" db:"platform"`
-	Name        string      `json:"name" db:"name"`
-	Description string      `json:"description" db:"description"`
-	Releases    []Release   `json:"releases" db:"-"`
-	Publisher   *PublicUser `json:"publisher,omitempty" db:"-"`
-	CreatedAt   time.Time   `json:"createdAt" db:"created_at"`
+	ID          uuid.UUID   `json:"id"`
+	Platform    string      `json:"platform"`
+	Name        string      `json:"name"`
+	Description string      `json:"description"`
+	Releases    []Release   `json:"releases"`
+	Publisher   *PublicUser `json:"publisher,omitempty"`
+	CreatedAt   time.Time   `json:"createdAt"`
 }
 
 type NewPackage struct {
-	Platform    string `json:"platform" db:"platform"`
-	Name        string `json:"name" db:"name"`
-	Description string `json:"description" db:"description"`
+	Platform    string `json:"platform"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
 }
 
 // Package comes from the path, publisher from credentials.
 type NewRelease struct {
-	URL         string `json:"url" db:"url"`
-	Version     string `json:"version" db:"version"`
-	Description string `json:"description" db:"description"`
+	Version      string       `json:"version"`
+	Description  string       `json:"description"`
+	Dependencies Requirements `json:"dependencies"`
+	Requires     Requirements `json:"requires"`
+	Artifacts    []Artifact   `json:"artifacts"`
 }
 
 type GitHubRelease struct {

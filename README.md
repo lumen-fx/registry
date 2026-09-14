@@ -1,8 +1,13 @@
 # lpm
 
-A package registry and its command-line client. Users register, publish
-packages, and publish releases against them; clients search the registry and
-fetch release artifacts over HTTPS.
+A package registry and its command-line client. Publishers create packages and
+release versions of them; `lpm` resolves what a project needs, fetches the
+artifacts over HTTPS, and pins the result in a lock file.
+
+The registry stores no bytes. A release records where each archive is, what it
+hashes to, and how big it is, and the publisher hosts the archives, usually on
+a GitHub release. `lumenc` and the `candela` CLI shell out to `lpm` and read
+its JSON, so one package manager serves both.
 
 ## Layout
 
@@ -17,13 +22,17 @@ Each Go module has its own README: [server](server/README.md) covers the API,
 configuration, migrations, and tests; [cli](cli/README.md) covers installing
 and using `lpm`.
 
+The version-requirement grammar lives in `cli/req`, and the server imports it
+so a requirement means the same thing on both sides.
+
 ## Releases
 
 `release.yml` builds the server image and pushes it to GHCR on every push to
 `main` and on `v*` tags, tagged `sha-<commit>`, `main`, and the version.
 `cli-release.yml` cuts cross-compiled `lpm` binaries from the same `v*` tag as
-a GitHub release. `curl -fsSL https://reg.lumenfx.dev/install.sh | sh`
-installs the newest one. One tag releases everything.
+a GitHub release. `curl -fsSL https://reg.lumenfx.dev/install.sh | sh` installs
+the newest one, checking it against the release's `checksums.txt` first. One
+tag releases everything.
 
 ## Deploying
 

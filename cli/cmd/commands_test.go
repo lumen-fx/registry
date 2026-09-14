@@ -51,8 +51,14 @@ func fakeRegistry(t *testing.T) *httptest.Server {
 	mux.HandleFunc("POST /packages/lantern/releases", func(w http.ResponseWriter, r *http.Request) {
 		if authed(w, r) {
 			w.WriteHeader(http.StatusCreated)
-			fmt.Fprint(w, `{"id":"33333333-3333-3333-3333-333333333333","url":"https://example.test/l.tgz","version":"1.0.0"}`)
+			fmt.Fprint(w, `{"id":"33333333-3333-3333-3333-333333333333","version":"1.0.0",`+
+				`"artifacts":[{"target":"any","url":"https://example.test/l.tgz","sha256":"aaaa","size":4}]}`)
 		}
+	})
+	// `lpm release` hashes every artifact it publishes, so the archive has to
+	// be somewhere it can fetch it from.
+	mux.HandleFunc("GET /lantern-1.0.0.tar.gz", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("an archive"))
 	})
 
 	server := httptest.NewServer(mux)
@@ -88,7 +94,9 @@ func TestLoginPublishReleaseFlow(t *testing.T) {
 		t.Errorf("publish output = %q", out)
 	}
 
-	out, err = run(t, "", "release", "lantern", "1.0.0", "--url", "https://example.test/l.tgz")
+	out, err = run(t, "", "release", "lantern", "1.0.0",
+		"--artifact", "any="+registry.URL+"/lantern-1.0.0.tar.gz",
+		"--dep", "geom@^0.3", "--requires", "lumenc@>=0.2")
 	if err != nil {
 		t.Fatalf("release: %v", err)
 	}

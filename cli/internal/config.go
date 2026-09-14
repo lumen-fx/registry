@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 const DefaultRegistry = "https://reg.lumenfx.dev"
@@ -14,6 +15,10 @@ const DefaultRegistry = "https://reg.lumenfx.dev"
 type Config struct {
 	Registry string `json:"registry"`
 	Token    string `json:"token"`
+
+	// Whether a config file was read at all. `lpm login` records the registry
+	// it signed in to, and that choice outranks the environment.
+	saved bool
 }
 
 // LPM_CONFIG_DIR overrides the platform default.
@@ -50,7 +55,28 @@ func LoadConfig() (Config, error) {
 	if cfg.Registry == "" {
 		cfg.Registry = DefaultRegistry
 	}
+	cfg.saved = true
 	return cfg, nil
+}
+
+// ResolveRegistry picks the registry to talk to: what --registry names, then
+// what `lpm login` saved, then LPM_REGISTRY, then the default.
+func ResolveRegistry(flag string) (string, error) {
+	if flag != "" {
+		return strings.TrimSuffix(flag, "/"), nil
+	}
+
+	cfg, err := LoadConfig()
+	if err != nil {
+		return "", err
+	}
+	if cfg.saved && cfg.Registry != "" {
+		return strings.TrimSuffix(cfg.Registry, "/"), nil
+	}
+	if env := os.Getenv("LPM_REGISTRY"); env != "" {
+		return strings.TrimSuffix(env, "/"), nil
+	}
+	return DefaultRegistry, nil
 }
 
 // SaveConfig writes the file readable by the owner alone; it holds a token.
