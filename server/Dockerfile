@@ -3,12 +3,17 @@
 # migration Job always run the same code.
 FROM golang:1.26 AS build
 
+# The build context is the repository root: server/go.mod replaces the cli
+# module with ../cli, so the module graph does not resolve from server/ alone.
 WORKDIR /src
+COPY cli/go.mod cli/go.sum cli/
+COPY server/go.mod server/go.sum server/
 
-COPY go.mod go.sum ./
+WORKDIR /src/server
 RUN go mod download
 
-COPY . .
+COPY cli /src/cli
+COPY server /src/server
 
 ARG VERSION=dev
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath \
