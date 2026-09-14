@@ -112,7 +112,16 @@ a { color: var(--flame); }
 .release .version { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-weight: 600; min-width: 5rem; }
 .release time { color: var(--muted); font-size: .85rem; }
 .release .rel-desc { color: var(--muted); flex: 1 1 12rem; }
-.release .dl { margin-left: auto; font-size: .85rem; white-space: nowrap; }
+.rel-details {
+  flex-basis: 100%; display: flex; align-items: baseline; gap: .4rem .8rem;
+  flex-wrap: wrap; font-size: .85rem; margin-top: .3rem;
+}
+.rel-details .artifact {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  white-space: nowrap;
+}
+.rel-details .artifact-size { color: var(--muted); margin-right: .6rem; }
+.rel-details .deps { color: var(--muted); }
 
 .state { color: var(--muted); padding: 2rem 0; }
 
@@ -169,6 +178,16 @@ function el(tag, cls, text) {
 
 function day(iso) {
   return iso ? iso.slice(0, 10) : "";
+}
+
+// Artifact sizes run from a few kB to a few hundred MB, so one unit for all
+// of them reads badly at one end or the other.
+function size(bytes) {
+  if (!bytes) return "";
+  const units = ["B", "kB", "MB", "GB"];
+  let n = bytes, i = 0;
+  while (n >= 1024 && i < units.length - 1) { n /= 1024; i += 1; }
+  return (i === 0 ? n : n.toFixed(1)) + " " + units[i];
 }
 
 function badgeFor(platform) {
@@ -304,10 +323,24 @@ async function renderPackage(name) {
       t.dateTime = r.createdAt || "";
       row.append(t);
       if (r.description) row.append(el("span", "rel-desc", r.description));
-      const dl = el("a", "dl", "download");
-      dl.href = r.url;
-      dl.rel = "noopener";
-      row.append(dl);
+
+      const details = el("div", "rel-details");
+
+      for (const a of r.artifacts || []) {
+        const dl = el("a", "artifact", a.target);
+        dl.href = a.url;
+        dl.rel = "noopener";
+        dl.title = "sha256:" + a.sha256;
+        details.append(dl, el("span", "artifact-size", size(a.size)));
+      }
+
+      const deps = Object.keys(r.dependencies || {}).sort();
+      if (deps.length) {
+        details.append(el("span", "deps",
+          "depends on " + deps.map((d) => d + " " + r.dependencies[d]).join(", ")));
+      }
+
+      if (details.childNodes.length) row.append(details);
       frag.append(row);
     }
   }

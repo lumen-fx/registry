@@ -32,19 +32,76 @@ Search filters on `GET /packages`, all optional and combined with AND:
 No filter lists the newest packages. `limit` defaults to 50 and is capped at
 200. An unparseable `limit` is a `422`, not a silent fallback.
 
+## Packages, releases, and artifacts
+
+A package has a globally unique name and belongs to one platform, either
+`lumen` or `candela`. `POST /packages` takes `platform`, `name`, and
+`description`.
+
+A release carries the version, what it depends on, what it needs from its
+host, and one artifact per target. The registry stores no bytes: the publisher
+hosts the archives, and the registry records where each one is, what it hashes
+to, and how big it is, so a client can verify what it downloaded.
+
+`POST /packages/{package}/releases`:
+
+```json
+{
+  "version": "1.2.3",
+  "description": "faster tessellation",
+  "dependencies": {"geom": "^0.3"},
+  "requires": {"lumenc": ">=0.2, <1"},
+  "artifacts": [
+    {
+      "target": "linux-x86_64",
+      "url": "https://github.com/you/shape-tools/releases/download/v1.2.3/linux-x86_64.tar.gz",
+      "sha256": "0123...",
+      "size": 481922
+    }
+  ]
+}
+```
+
+`version` is semver: `MAJOR.MINOR.PATCH`, with an optional pre-release and
+build metadata. `dependencies` maps a package name to a version requirement
+and `requires` maps a host name to one. Both default to `{}`.
+
+A requirement is read with the same grammar `lpm` resolves it by, from the
+`cli/req` package the server imports, so a release the registry accepts is one
+a client can resolve. `^1.2`, `~1.2`, `=1.2.3`, `>=1, <2`, `1.2.*`, and `*` all
+mean what cargo means by them, and a bare `1.2` is a caret requirement. A
+requirement that does not parse is a `422` naming its field, such as
+`dependencies.geom`.
+
+Every release needs at least one artifact. `target` is one of `linux-x86_64`,
+`linux-aarch64`, `macos-x86_64`, `macos-aarch64`, `windows-x86_64`,
+`windows-aarch64`, or `any`, and a release names each target at most once. A
+client prefers the artifact for its own target and falls back to `any`.
+`sha256` is 64 lowercase hex characters and `size` is the archive's size in
+bytes.
+
+Artifact URLs must be `https` with no embedded credentials. Clients fetch them
+to install code, so plain `http` would leave the archive open to tampering in
+transit.
+
+Every `GET` that returns a release returns it in the same shape, plus `id` and
+`createdAt`, with the artifacts ordered by target.
+
 Errors are JSON. Validation failures return `422` with a `fields` object, so a
 client can fix a whole form from one response:
 
 ```json
 {
   "error": "request contains invalid fields",
-  "fields": {"url": "must use https", "version": "is required"}
+  "fields": {
+    "artifacts[0].url": "must use https",
+    "version": "is required"
+  }
 }
 ```
 
-Release URLs must be `https` with no embedded credentials. Clients fetch them
-to install code, so plain `http` would leave the artifact open to tampering in
-transit.
+A release and its artifacts are written together, so a `422` or a conflict
+leaves the version free for the next attempt.
 
 ## Accounts
 

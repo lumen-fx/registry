@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/google/uuid"
@@ -162,7 +163,48 @@ func (s *Server) listPackages(ctx context.Context, f PackageFilter) ([]Package, 
 	return packages, nil
 }
 
-const releaseColumns = `id, package_id, url, version, description, created_at`
+const releaseColumns = `id, package_id, version, description, dependencies, requires, created_at`
+
+const artifactColumns = `id, release_id, target, url, sha256, size`
+
+// attachArtifacts fills in the artifacts of every release in one query, not
+// one per release. It writes through the slice.
+func (s *Server) attachArtifacts(ctx context.Context, releases []Release) error {
+	if len(releases) == 0 {
+		return nil
+	}
+
+	ids := make([]uuid.UUID, len(releases))
+	byRelease := make(map[uuid.UUID]*Release, len(releases))
+	for i := range releases {
+		ids[i] = releases[i].ID
+		// [] reads better than null.
+		releases[i].Artifacts = []Artifact{}
+		byRelease[releases[i].ID] = &releases[i]
+	}
+
+	rows, err := s.db.Query(ctx,
+		`SELECT `+artifactColumns+`
+		 FROM artifacts
+		 WHERE release_id = ANY($1)
+		 ORDER BY release_id, target`, ids)
+	if err != nil {
+		return fmt.Errorf("list artifacts: %w", err)
+	}
+
+	artifacts, err := pgx.CollectRows(rows, pgx.RowToStructByName[Artifact])
+	if err != nil {
+		return fmt.Errorf("collect artifacts: %w", err)
+	}
+
+	for _, artifact := range artifacts {
+		if rel, ok := byRelease[artifact.ReleaseID]; ok {
+			rel.Artifacts = append(rel.Artifacts, artifact)
+		}
+	}
+
+	return nil
+}
 
 // One query for all packages, not N+1. Newest first.
 func (s *Server) attachReleases(ctx context.Context, packages []Package) error {
@@ -191,6 +233,11 @@ func (s *Server) attachReleases(ctx context.Context, packages []Package) error {
 	releases, err := pgx.CollectRows(rows, pgx.RowToStructByName[Release])
 	if err != nil {
 		return fmt.Errorf("collect releases: %w", err)
+	}
+
+	// Before the copies land in their packages, so every copy carries them.
+	if err := s.attachArtifacts(ctx, releases); err != nil {
+		return err
 	}
 
 	for _, rel := range releases {
@@ -258,7 +305,13 @@ func (s *Server) getRelease(ctx context.Context, name string, version string) (*
 		return nil, fmt.Errorf("collect release: %w", err)
 	}
 
-	return &release, nil
+	// attachArtifacts writes through the slice.
+	releases := []Release{release}
+	if err := s.attachArtifacts(ctx, releases); err != nil {
+		return nil, err
+	}
+
+	return &releases[0], nil
 }
 
 func (s *Server) publishPackage(ctx context.Context, publisher User, packaged NewPackage) (*Package, error) {
@@ -286,20 +339,29 @@ func (s *Server) publishPackage(ctx context.Context, publisher User, packaged Ne
 	return &createdPackage, nil
 }
 
+// publishRelease writes the release and its artifacts together, so a release
+// nobody can download never reaches the database.
 func (s *Server) publishRelease(ctx context.Context, publisher User, packaged Package, release NewRelease) (*Release, error) {
 	if packaged.PublisherID != publisher.ID {
 		return nil, ErrNotPublisher
 	}
 
-	rows, err := s.db.Query(ctx,
-		`INSERT INTO releases (package_id, url, version, description)
-		 VALUES ($1, $2, $3, $4)
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("begin: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // a committed tx rolls back to nothing
+
+	rows, err := tx.Query(ctx,
+		`INSERT INTO releases (package_id, version, description, dependencies, requires)
+		 VALUES ($1, $2, $3, $4, $5)
 		 ON CONFLICT DO NOTHING
 		 RETURNING `+releaseColumns,
 		packaged.ID,
-		release.URL,
 		release.Version,
 		release.Description,
+		release.Dependencies,
+		release.Requires,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("insert release: %w", err)
@@ -311,6 +373,33 @@ func (s *Server) publishRelease(ctx context.Context, publisher User, packaged Pa
 	}
 	if err != nil {
 		return nil, fmt.Errorf("collect release: %w", err)
+	}
+
+	createdRelease.Artifacts = []Artifact{}
+	for _, artifact := range release.Artifacts {
+		rows, err := tx.Query(ctx,
+			`INSERT INTO artifacts (release_id, target, url, sha256, size)
+			 VALUES ($1, $2, $3, $4, $5)
+			 RETURNING `+artifactColumns,
+			createdRelease.ID, artifact.Target, artifact.URL, artifact.SHA256, artifact.Size)
+		if err != nil {
+			return nil, fmt.Errorf("insert artifact: %w", err)
+		}
+
+		created, err := pgx.CollectExactlyOneRow(rows, pgx.RowToStructByName[Artifact])
+		if err != nil {
+			return nil, fmt.Errorf("collect artifact: %w", err)
+		}
+		createdRelease.Artifacts = append(createdRelease.Artifacts, created)
+	}
+
+	// Sorted, so a response looks the same however the request was ordered.
+	slices.SortFunc(createdRelease.Artifacts, func(a, b Artifact) int {
+		return strings.Compare(a.Target, b.Target)
+	})
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("commit release: %w", err)
 	}
 
 	return &createdRelease, nil
