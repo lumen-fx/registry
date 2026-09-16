@@ -10,8 +10,8 @@ import (
 
 const DefaultRegistry = "https://reg.lumenfx.dev"
 
-// Config is what `lpm login` stores: which registry to talk to and the API
-// token that authenticates publishing there.
+// Config is the credentials a command runs on: which registry to talk to and
+// the API token that authenticates publishing there. `lpm login` saves one.
 type Config struct {
 	Registry string `json:"registry"`
 	Token    string `json:"token"`
@@ -33,29 +33,48 @@ func configPath() (string, error) {
 	return filepath.Join(dir, "lpm", "config.json"), nil
 }
 
-// LoadConfig returns an empty config when none was saved yet.
+// EnvToken is the token LPM_TOKEN supplies, or "" when it names none. It is
+// trimmed, because a secret handed to a CI job often arrives with a newline
+// on the end.
+func EnvToken() string {
+	return strings.TrimSpace(os.Getenv("LPM_TOKEN"))
+}
+
+// LoadConfig returns the saved registry and token, falling back to the
+// default registry and to LPM_TOKEN for whatever the file does not supply.
+// Every command that needs credentials reads them here, so LPM_TOKEN
+// authenticates all of them: a CI job holds the secret and cannot run an
+// interactive login.
+//
+// A token saved by `lpm login` outranks LPM_TOKEN, the way a saved registry
+// outranks LPM_REGISTRY.
 func LoadConfig() (Config, error) {
 	path, err := configPath()
 	if err != nil {
 		return Config{}, err
 	}
 
+	cfg := Config{Registry: DefaultRegistry}
 	raw, err := os.ReadFile(path)
-	if os.IsNotExist(err) {
-		return Config{Registry: DefaultRegistry}, nil
-	}
-	if err != nil {
+	switch {
+	case os.IsNotExist(err):
+		// Nothing saved, so the default registry and the environment stand
+		// on their own.
+	case err != nil:
 		return Config{}, fmt.Errorf("read config: %w", err)
+	default:
+		if err := json.Unmarshal(raw, &cfg); err != nil {
+			return Config{}, fmt.Errorf("parse %s: %w", path, err)
+		}
+		if cfg.Registry == "" {
+			cfg.Registry = DefaultRegistry
+		}
+		cfg.saved = true
 	}
 
-	var cfg Config
-	if err := json.Unmarshal(raw, &cfg); err != nil {
-		return Config{}, fmt.Errorf("parse %s: %w", path, err)
+	if cfg.Token == "" {
+		cfg.Token = EnvToken()
 	}
-	if cfg.Registry == "" {
-		cfg.Registry = DefaultRegistry
-	}
-	cfg.saved = true
 	return cfg, nil
 }
 

@@ -17,7 +17,10 @@ var loginCmd = &cobra.Command{
 	Long: `Reads an API token and saves it for the publish and release commands.
 
 Mint the token in the registry's web UI: sign in with GitHub, open Account,
-and create a token. Then paste it here.`,
+and create a token. Then paste it here.
+
+A job with no terminal to paste into sets LPM_TOKEN instead, and every command
+that needs a token uses it. A token saved here outranks LPM_TOKEN.`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		fmt.Fprintf(cmd.OutOrStdout(), "Paste an API token from %s (mint one under Account):\n", loginRegistry)
@@ -53,29 +56,30 @@ var logoutCmd = &cobra.Command{
 		if err := internal.DeleteConfig(); err != nil {
 			return err
 		}
-		fmt.Fprintln(cmd.OutOrStdout(), "Signed out")
+		out := cmd.OutOrStdout()
+		fmt.Fprintln(out, "Signed out")
+		if internal.EnvToken() != "" {
+			fmt.Fprintln(out, "LPM_TOKEN is still set and still signs you in; unset it to finish.")
+		}
 		return nil
 	},
 }
 
 var whoamiCmd = &cobra.Command{
 	Use:   "whoami",
-	Short: "Show which account the saved token belongs to",
+	Short: "Show which account the token belongs to",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		cfg, err := internal.LoadConfig()
+		client, err := authedClient()
 		if err != nil {
 			return err
-		}
-		if cfg.Token == "" {
-			return fmt.Errorf("not signed in; run `lpm login` first")
 		}
 
-		user, err := internal.NewClient(cfg).Me()
+		user, err := client.Me()
 		if err != nil {
 			return err
 		}
-		fmt.Fprintf(cmd.OutOrStdout(), "%s on %s\n", user.Username, cfg.Registry)
+		fmt.Fprintf(cmd.OutOrStdout(), "%s on %s\n", user.Username, client.Registry)
 		return nil
 	},
 }

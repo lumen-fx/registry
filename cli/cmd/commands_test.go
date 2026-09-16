@@ -7,6 +7,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/lumen-fx/registry/cli/internal"
 )
 
 // run executes the root command with a fresh output buffer and the given
@@ -68,6 +70,7 @@ func fakeRegistry(t *testing.T) *httptest.Server {
 
 func TestLoginPublishReleaseFlow(t *testing.T) {
 	t.Setenv("LPM_CONFIG_DIR", t.TempDir())
+	t.Setenv("LPM_TOKEN", "")
 	registry := fakeRegistry(t)
 
 	out, err := run(t, "lpm_good\n", "login", "--registry", registry.URL)
@@ -115,6 +118,7 @@ func TestLoginPublishReleaseFlow(t *testing.T) {
 
 func TestLoginRejectsABadToken(t *testing.T) {
 	t.Setenv("LPM_CONFIG_DIR", t.TempDir())
+	t.Setenv("LPM_TOKEN", "")
 	registry := fakeRegistry(t)
 
 	if _, err := run(t, "lpm_wrong\n", "login", "--registry", registry.URL); err == nil ||
@@ -129,9 +133,70 @@ func TestLoginRejectsABadToken(t *testing.T) {
 
 func TestPublishWithoutLoginPointsAtLogin(t *testing.T) {
 	t.Setenv("LPM_CONFIG_DIR", t.TempDir())
+	t.Setenv("LPM_TOKEN", "")
 
 	if _, err := run(t, "", "publish", "lantern", "--platform", "lumen"); err == nil ||
 		!strings.Contains(err.Error(), "lpm login") {
 		t.Errorf("publish = %v, want a pointer at login", err)
+	}
+}
+
+// A CI job holds a token as a secret and has no terminal to paste one into.
+// The registry still comes from the saved file here, because publish and
+// whoami have no --registry flag and read no registry from the environment.
+func TestTheEnvironmentTokenSignsCommandsIn(t *testing.T) {
+	t.Setenv("LPM_CONFIG_DIR", t.TempDir())
+	registry := fakeRegistry(t)
+	if err := internal.SaveConfig(internal.Config{Registry: registry.URL}); err != nil {
+		t.Fatal(err)
+	}
+
+	// The repeatable flags live on the package and keep whatever an earlier
+	// run of the command left in them.
+	releaseArtifacts, releaseDeps, releaseRequires = nil, nil, nil
+
+	t.Setenv("LPM_TOKEN", "lpm_good")
+	out, err := run(t, "", "whoami")
+	if err != nil {
+		t.Fatalf("whoami: %v", err)
+	}
+	if !strings.Contains(out, "ada") {
+		t.Errorf("whoami output = %q, want ada", out)
+	}
+
+	out, err = run(t, "", "publish", "lantern", "--platform", "lumen")
+	if err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+	if !strings.Contains(out, "Published lantern") {
+		t.Errorf("publish output = %q", out)
+	}
+
+	out, err = run(t, "", "release", "lantern", "1.0.0",
+		"--artifact", "any="+registry.URL+"/lantern-1.0.0.tar.gz")
+	if err != nil {
+		t.Fatalf("release: %v", err)
+	}
+	if !strings.Contains(out, "Released lantern 1.0.0") {
+		t.Errorf("release output = %q", out)
+	}
+
+	// Logging out forgets the file and says the environment still signs in.
+	out, err = run(t, "", "logout")
+	if err != nil {
+		t.Fatalf("logout: %v", err)
+	}
+	if !strings.Contains(out, "LPM_TOKEN is still set") {
+		t.Errorf("logout output = %q, want the note about the environment", out)
+	}
+
+	// With nothing set, logout says only that it signed out.
+	t.Setenv("LPM_TOKEN", "")
+	out, err = run(t, "", "logout")
+	if err != nil {
+		t.Fatalf("logout: %v", err)
+	}
+	if strings.Contains(out, "LPM_TOKEN") {
+		t.Errorf("logout output = %q, want no note about the environment", out)
 	}
 }

@@ -429,7 +429,8 @@ async function renderAccount() {
 
   const tokensLabel = el("div", "section-label", "API tokens");
   const hint = el("p", "byline",
-    "A token authenticates lpm on this machine: run lpm login and paste it. It is shown once, when created.");
+    "A token authenticates lpm on this machine: run lpm login and paste it, or set LPM_TOKEN in CI. " +
+    "It is shown once, when created.");
 
   const mint = el("div", "mint");
   const nameInput = el("input");

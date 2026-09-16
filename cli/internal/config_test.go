@@ -8,6 +8,7 @@ import (
 
 func TestConfigRoundTrip(t *testing.T) {
 	t.Setenv("LPM_CONFIG_DIR", t.TempDir())
+	t.Setenv("LPM_TOKEN", "")
 
 	// Nothing saved yet: the default registry and no token.
 	cfg, err := LoadConfig()
@@ -143,5 +144,106 @@ func TestResolveRegistryReportsABrokenConfig(t *testing.T) {
 
 	if _, err := ResolveRegistry(""); err == nil {
 		t.Error("ResolveRegistry accepted a config that is not JSON")
+	}
+}
+
+func TestLoadConfigFallsBackToTheEnvironmentToken(t *testing.T) {
+	t.Setenv("LPM_CONFIG_DIR", t.TempDir())
+	t.Setenv("LPM_TOKEN", "")
+
+	// Nothing saved and nothing in the environment: no token.
+	cfg, err := LoadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Token != "" {
+		t.Errorf("token = %q, want none", cfg.Token)
+	}
+
+	// Nothing saved: the environment signs in, on the default registry.
+	t.Setenv("LPM_TOKEN", "lpm_from_env\n")
+	cfg, err = LoadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Token != "lpm_from_env" {
+		t.Errorf("token = %q, want the environment's, trimmed", cfg.Token)
+	}
+	if cfg.Registry != DefaultRegistry {
+		t.Errorf("registry = %q, want %q", cfg.Registry, DefaultRegistry)
+	}
+	if cfg.saved {
+		t.Error("an environment token reported itself saved")
+	}
+
+	// What login saved outranks the environment.
+	if err := SaveConfig(Config{Registry: "https://saved.example.test", Token: "lpm_saved"}); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = LoadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Token != "lpm_saved" {
+		t.Errorf("token = %q, want the saved one", cfg.Token)
+	}
+
+	// A saved config that holds no token still takes one from the
+	// environment, and keeps its own registry.
+	if err := SaveConfig(Config{Registry: "https://saved.example.test"}); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = LoadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Token != "lpm_from_env" || cfg.Registry != "https://saved.example.test" {
+		t.Errorf("cfg = %+v, want the saved registry and the environment token", cfg)
+	}
+
+	// Logging out leaves the environment token authenticating.
+	if err := DeleteConfig(); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = LoadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Token != "lpm_from_env" {
+		t.Errorf("token after logout = %q, want the environment's", cfg.Token)
+	}
+}
+
+func TestEnvTokenTrimsAndReportsEmpty(t *testing.T) {
+	t.Setenv("LPM_TOKEN", "")
+	if got := EnvToken(); got != "" {
+		t.Errorf("EnvToken() = %q, want empty", got)
+	}
+
+	t.Setenv("LPM_TOKEN", "  \t\n")
+	if got := EnvToken(); got != "" {
+		t.Errorf("EnvToken() = %q, want empty for whitespace alone", got)
+	}
+
+	t.Setenv("LPM_TOKEN", " lpm_padded \n")
+	if got := EnvToken(); got != "lpm_padded" {
+		t.Errorf("EnvToken() = %q, want it trimmed", got)
+	}
+}
+
+func TestEnvironmentTokenIsNeverWrittenToDisk(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("LPM_CONFIG_DIR", dir)
+	t.Setenv("LPM_TOKEN", "lpm_from_env")
+
+	cfg, err := LoadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "config.json")); !os.IsNotExist(err) {
+		t.Errorf("stat config.json = %v, want it absent; reading the environment wrote a file", err)
+	}
+	if cfg.saved {
+		t.Error("an environment token reported itself saved, so it would outrank LPM_REGISTRY")
 	}
 }
