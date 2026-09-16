@@ -9,14 +9,15 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// publishClient loads the saved credentials or explains how to get them.
-func publishClient() (*internal.Client, error) {
+// authedClient loads the credentials every command that needs a token runs
+// on, or explains how to get them.
+func authedClient() (*internal.Client, error) {
 	cfg, err := internal.LoadConfig()
 	if err != nil {
 		return nil, err
 	}
 	if cfg.Token == "" {
-		return nil, fmt.Errorf("not signed in; run `lpm login` first")
+		return nil, fmt.Errorf("not signed in; run `lpm login` first, or set LPM_TOKEN")
 	}
 	return internal.NewClient(cfg), nil
 }
@@ -30,7 +31,7 @@ var publishCmd = &cobra.Command{
 afterwards with the release command.`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		client, err := publishClient()
+		client, err := authedClient()
 		if err != nil {
 			return err
 		}
@@ -64,7 +65,7 @@ lpm downloads every artifact, hashes it, and publishes the digest and the size
 alongside the URL, so what the registry records is what the URL served.`,
 	Args: exactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		client, err := publishClient()
+		client, err := authedClient()
 		if err != nil {
 			return err
 		}

@@ -43,6 +43,9 @@ Publishing needs an account. Sign in to the registry's web UI with GitHub, open
 Account, create a token, and paste it into `lpm login`. The token is saved in
 your user config directory, readable only by you.
 
+A CI job has no terminal to paste into: give it the token as `LPM_TOKEN` and
+`publish`, `release` and `whoami` use it without a login.
+
 ```sh
 lpm login
 lpm whoami
@@ -137,7 +140,11 @@ build metadata.
 ### login, logout, and whoami
 
 `login` reads an API token and saves it. `whoami` reports which account it
-belongs to. `logout` forgets it.
+belongs to. `logout` forgets the saved one, and says so when `LPM_TOKEN` is
+still set, because that token keeps signing you in.
+
+`LPM_TOKEN` authenticates every command that needs a token, so a CI job that
+holds the secret never runs `login`. A token saved by `login` outranks it.
 
 ## Version requirements
 
@@ -279,10 +286,15 @@ A failure is one line on stderr.
 | `LPM_CONFIG_DIR` | Where the saved registry and token live. Defaults to your user config directory. |
 | `LPM_CACHE_DIR` | The cache root. Defaults to your user cache directory. |
 | `LPM_REGISTRY` | The registry to use when `--registry` is absent and nothing is saved. |
+| `LPM_TOKEN` | The API token to publish with when `lpm login` saved none. |
 | `LPM_CA_FILE` | A PEM certificate authority to trust in addition to the system ones. |
 
 `--registry` wins, then what `lpm login` saved, then `LPM_REGISTRY`, then
 `https://reg.lumenfx.dev`.
+
+The token follows the same order without a flag: what `lpm login` saved, then
+`LPM_TOKEN`. Surrounding whitespace is trimmed, so a secret that arrives with a
+newline on the end still works.
 
 `LPM_CA_FILE` is for a registry or an artifact host behind a private
 certificate authority. It adds to the system trust store and never replaces it,
