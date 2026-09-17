@@ -9,7 +9,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var loginRegistry string
+var loginRegistry, whoamiRegistry string
 
 var loginCmd = &cobra.Command{
 	Use:   "login",
@@ -70,7 +70,7 @@ var whoamiCmd = &cobra.Command{
 	Short: "Show which account the token belongs to",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		client, err := authedClient()
+		client, err := authedClient(whoamiRegistry)
 		if err != nil {
 			return err
 		}
@@ -86,5 +86,6 @@ var whoamiCmd = &cobra.Command{
 
 func init() {
 	loginCmd.Flags().StringVar(&loginRegistry, "registry", internal.DefaultRegistry, "registry to sign in to")
+	whoamiCmd.Flags().StringVar(&whoamiRegistry, "registry", "", "registry to ask")
 	rootCmd.AddCommand(loginCmd, logoutCmd, whoamiCmd)
 }

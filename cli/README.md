@@ -121,9 +121,9 @@ each one publishes, and what each depends on and needs.
 ### publish and release
 
 ```
-lpm publish NAME --platform PLATFORM [-d DESCRIPTION]
+lpm publish NAME --platform PLATFORM [-d DESCRIPTION] [--registry URL]
 lpm release NAME VERSION --artifact TARGET=URL... [--dep NAME@REQUIREMENT]...
-            [--requires HOST@REQUIREMENT]... [-d DESCRIPTION]
+            [--requires HOST@REQUIREMENT]... [-d DESCRIPTION] [--registry URL]
 ```
 
 `publish` claims a name; names are unique across the whole registry. `release`
@@ -145,6 +145,7 @@ still set, because that token keeps signing you in.
 
 `LPM_TOKEN` authenticates every command that needs a token, so a CI job that
 holds the secret never runs `login`. A token saved by `login` outranks it.
+`whoami` takes `--registry` like the publishing commands do.
 
 ## Version requirements
 
@@ -290,7 +291,8 @@ A failure is one line on stderr.
 | `LPM_CA_FILE` | A PEM certificate authority to trust in addition to the system ones. |
 
 `--registry` wins, then what `lpm login` saved, then `LPM_REGISTRY`, then
-`https://reg.lumenfx.dev`.
+`https://reg.lumenfx.dev`. Every command picks its registry this way, the
+publishing ones included.
 
 The token follows the same order without a flag: what `lpm login` saved, then
 `LPM_TOKEN`. Surrounding whitespace is trimmed, so a secret that arrives with a
