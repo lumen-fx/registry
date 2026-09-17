@@ -44,7 +44,7 @@ Account, create a token, and paste it into `lpm login`. The token is saved in
 your user config directory, readable only by you.
 
 A CI job has no terminal to paste into: give it the token as `LPM_TOKEN` and
-`publish`, `release` and `whoami` use it without a login.
+`publish`, `release`, `delete` and `whoami` use it without a login.
 
 ```sh
 lpm login
@@ -118,12 +118,13 @@ lpm info NAME [--registry URL]
 `lumen` or `candela`. `info` prints one package with every release, the targets
 each one publishes, and what each depends on and needs.
 
-### publish and release
+### publish, release, and delete
 
 ```
 lpm publish NAME --platform PLATFORM [-d DESCRIPTION] [--registry URL]
 lpm release NAME VERSION --artifact TARGET=URL... [--dep NAME@REQUIREMENT]...
             [--requires HOST@REQUIREMENT]... [-d DESCRIPTION] [--registry URL]
+lpm delete NAME [--registry URL]
 ```
 
 `publish` claims a name; names are unique across the whole registry. `release`
@@ -136,6 +137,10 @@ the URL, so what the registry records is what the URL served. Each URL must be
 
 A version is semver: `MAJOR.MINOR.PATCH`, with an optional pre-release and
 build metadata.
+
+`delete` frees a name you claimed and never published to, so a name taken by a
+mistaken run does not stay taken. A package with releases stays, because
+installs resolve against it. The registry's account page deletes the same way.
 
 ### login, logout, and whoami
 

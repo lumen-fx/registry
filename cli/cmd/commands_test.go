@@ -19,7 +19,7 @@ func run(t *testing.T, stdin string, args ...string) (string, error) {
 	t.Helper()
 
 	releaseArtifacts, releaseDeps, releaseRequires = nil, nil, nil
-	publishRegistry, releaseRegistry, whoamiRegistry = "", "", ""
+	publishRegistry, releaseRegistry, whoamiRegistry, deleteRegistry = "", "", "", ""
 
 	var out bytes.Buffer
 	rootCmd.SetOut(&out)
@@ -60,6 +60,17 @@ func fakeRegistry(t *testing.T) *httptest.Server {
 			w.WriteHeader(http.StatusCreated)
 			fmt.Fprint(w, `{"id":"33333333-3333-3333-3333-333333333333","version":"1.0.0",`+
 				`"artifacts":[{"target":"any","url":"https://example.test/l.tgz","sha256":"aaaa","size":4}]}`)
+		}
+	})
+	mux.HandleFunc("DELETE /packages/lantern", func(w http.ResponseWriter, r *http.Request) {
+		if authed(w, r) {
+			w.WriteHeader(http.StatusNoContent)
+		}
+	})
+	mux.HandleFunc("DELETE /packages/beacon", func(w http.ResponseWriter, r *http.Request) {
+		if authed(w, r) {
+			w.WriteHeader(http.StatusConflict)
+			fmt.Fprint(w, `{"error":"a package with releases cannot be deleted"}`)
 		}
 	})
 	// `lpm release` hashes every artifact it publishes, so the archive has to
@@ -169,6 +180,32 @@ func TestLoginRejectsABadToken(t *testing.T) {
 	if _, err := run(t, "\n", "login", "--registry", registry.URL); err == nil ||
 		!strings.Contains(err.Error(), "no token") {
 		t.Errorf("empty login = %v, want the empty-token error", err)
+	}
+}
+
+func TestDeleteFreesANameAndRelaysARefusal(t *testing.T) {
+	t.Setenv("LPM_CONFIG_DIR", t.TempDir())
+	t.Setenv("LPM_TOKEN", "lpm_good")
+	registry := fakeRegistry(t)
+	deleteRegistry = ""
+
+	out, err := run(t, "", "delete", "lantern", "--registry", registry.URL)
+	if err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if !strings.Contains(out, "Deleted lantern") {
+		t.Errorf("delete output = %q", out)
+	}
+
+	if _, err := run(t, "", "delete", "beacon", "--registry", registry.URL); err == nil ||
+		!strings.Contains(err.Error(), "a package with releases cannot be deleted") {
+		t.Errorf("delete = %v, want the registry's refusal", err)
+	}
+
+	t.Setenv("LPM_TOKEN", "")
+	if _, err := run(t, "", "delete", "lantern", "--registry", registry.URL); err == nil ||
+		!strings.Contains(err.Error(), "lpm login") {
+		t.Errorf("delete without a token = %v, want a pointer at login", err)
 	}
 }
 

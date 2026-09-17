@@ -136,6 +136,29 @@ alongside the URL, so what the registry records is what the URL served.`,
 	},
 }
 
+var deleteRegistry string
+
+var deleteCmd = &cobra.Command{
+	Use:   "delete <name>",
+	Short: "Remove a package you own that has no releases",
+	Long: `Frees a name you claimed and never published to.
+
+A package with releases stays, because installs resolve against it.`,
+	Args: exactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		client, err := authedClient(deleteRegistry)
+		if err != nil {
+			return err
+		}
+
+		if err := client.DeletePackage(args[0]); err != nil {
+			return err
+		}
+		fmt.Fprintf(cmd.OutOrStdout(), "Deleted %s\n", args[0])
+		return nil
+	},
+}
+
 // requirementFlag turns repeated NAME@REQUIREMENT flags into the map the
 // registry stores. A requirement lpm cannot parse is rejected here, rather
 // than published for every client to fail on.
@@ -169,5 +192,7 @@ func init() {
 	releaseCmd.Flags().StringVarP(&releaseDescription, "description", "d", "", "what changed in this release")
 	releaseCmd.Flags().StringVar(&releaseRegistry, "registry", "", "registry to release to")
 
-	rootCmd.AddCommand(publishCmd, releaseCmd)
+	deleteCmd.Flags().StringVar(&deleteRegistry, "registry", "", "registry to delete from")
+
+	rootCmd.AddCommand(publishCmd, releaseCmd, deleteCmd)
 }
