@@ -12,9 +12,14 @@ import (
 )
 
 // run executes the root command with a fresh output buffer and the given
-// stdin, returning what it printed and the error.
+// stdin, returning what it printed and the error. The flags live on the
+// package and keep whatever an earlier run left in them, so the ones these
+// tests set start empty every time.
 func run(t *testing.T, stdin string, args ...string) (string, error) {
 	t.Helper()
+
+	releaseArtifacts, releaseDeps, releaseRequires = nil, nil, nil
+	publishRegistry, releaseRegistry, whoamiRegistry = "", "", ""
 
 	var out bytes.Buffer
 	rootCmd.SetOut(&out)
@@ -116,6 +121,42 @@ func TestLoginPublishReleaseFlow(t *testing.T) {
 	}
 }
 
+// Every command that publishes takes its registry from the flag first, so
+// a saved registry never catches a publish meant for another one.
+func TestPublishingCommandsTakeTheRegistryFlag(t *testing.T) {
+	t.Setenv("LPM_CONFIG_DIR", t.TempDir())
+	t.Setenv("LPM_TOKEN", "lpm_good")
+	t.Setenv("LPM_REGISTRY", "")
+	registry := fakeRegistry(t)
+	if err := internal.SaveConfig(internal.Config{Registry: "https://saved.example.test"}); err != nil {
+		t.Fatal(err)
+	}
+	out, err := run(t, "", "whoami", "--registry", registry.URL)
+	if err != nil {
+		t.Fatalf("whoami: %v", err)
+	}
+	if !strings.Contains(out, "ada on "+registry.URL) {
+		t.Errorf("whoami output = %q, want ada on the flag's registry", out)
+	}
+
+	out, err = run(t, "", "publish", "lantern", "--platform", "lumen", "--registry", registry.URL)
+	if err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+	if !strings.Contains(out, "Published lantern") {
+		t.Errorf("publish output = %q", out)
+	}
+
+	out, err = run(t, "", "release", "lantern", "1.0.0", "--registry", registry.URL,
+		"--artifact", "any="+registry.URL+"/lantern-1.0.0.tar.gz")
+	if err != nil {
+		t.Fatalf("release: %v", err)
+	}
+	if !strings.Contains(out, "Released lantern 1.0.0") {
+		t.Errorf("release output = %q", out)
+	}
+}
+
 func TestLoginRejectsABadToken(t *testing.T) {
 	t.Setenv("LPM_CONFIG_DIR", t.TempDir())
 	t.Setenv("LPM_TOKEN", "")
@@ -141,19 +182,12 @@ func TestPublishWithoutLoginPointsAtLogin(t *testing.T) {
 	}
 }
 
-// A CI job holds a token as a secret and has no terminal to paste one into.
-// The registry still comes from the saved file here, because publish and
-// whoami have no --registry flag and read no registry from the environment.
+// A CI job holds a token as a secret and has no terminal to paste one into,
+// and names its registry in the environment the same way.
 func TestTheEnvironmentTokenSignsCommandsIn(t *testing.T) {
 	t.Setenv("LPM_CONFIG_DIR", t.TempDir())
 	registry := fakeRegistry(t)
-	if err := internal.SaveConfig(internal.Config{Registry: registry.URL}); err != nil {
-		t.Fatal(err)
-	}
-
-	// The repeatable flags live on the package and keep whatever an earlier
-	// run of the command left in them.
-	releaseArtifacts, releaseDeps, releaseRequires = nil, nil, nil
+	t.Setenv("LPM_REGISTRY", registry.URL)
 
 	t.Setenv("LPM_TOKEN", "lpm_good")
 	out, err := run(t, "", "whoami")

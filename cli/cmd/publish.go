@@ -10,8 +10,14 @@ import (
 )
 
 // authedClient loads the credentials every command that needs a token runs
-// on, or explains how to get them.
-func authedClient() (*internal.Client, error) {
+// on, or explains how to get them. The registry comes from the same places
+// the read-only commands take it: the flag, then the saved one, then
+// LPM_REGISTRY, so a job that publishes to a staging registry names it once.
+func authedClient(flag string) (*internal.Client, error) {
+	registry, err := internal.ResolveRegistry(flag)
+	if err != nil {
+		return nil, err
+	}
 	cfg, err := internal.LoadConfig()
 	if err != nil {
 		return nil, err
@@ -19,10 +25,10 @@ func authedClient() (*internal.Client, error) {
 	if cfg.Token == "" {
 		return nil, fmt.Errorf("not signed in; run `lpm login` first, or set LPM_TOKEN")
 	}
-	return internal.NewClient(cfg), nil
+	return internal.NewClient(internal.Config{Registry: registry, Token: cfg.Token}), nil
 }
 
-var publishPlatform, publishDescription string
+var publishPlatform, publishDescription, publishRegistry string
 
 var publishCmd = &cobra.Command{
 	Use:   "publish <name>",
@@ -31,7 +37,7 @@ var publishCmd = &cobra.Command{
 afterwards with the release command.`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		client, err := authedClient()
+		client, err := authedClient(publishRegistry)
 		if err != nil {
 			return err
 		}
@@ -49,7 +55,7 @@ afterwards with the release command.`,
 	},
 }
 
-var releaseDescription string
+var releaseDescription, releaseRegistry string
 var releaseArtifacts, releaseDeps, releaseRequires []string
 
 var releaseCmd = &cobra.Command{
@@ -65,7 +71,7 @@ lpm downloads every artifact, hashes it, and publishes the digest and the size
 alongside the URL, so what the registry records is what the URL served.`,
 	Args: exactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		client, err := authedClient()
+		client, err := authedClient(releaseRegistry)
 		if err != nil {
 			return err
 		}
@@ -154,12 +160,14 @@ func requirementFlag(flag string, values []string) (internal.Requirements, error
 func init() {
 	publishCmd.Flags().StringVarP(&publishPlatform, "platform", "p", "", "platform the package targets, lumen or candela")
 	publishCmd.Flags().StringVarP(&publishDescription, "description", "d", "", "what the package is")
+	publishCmd.Flags().StringVar(&publishRegistry, "registry", "", "registry to publish to")
 	_ = publishCmd.MarkFlagRequired("platform")
 
 	releaseCmd.Flags().StringArrayVar(&releaseArtifacts, "artifact", nil, "an archive to publish, as TARGET=URL; repeatable")
 	releaseCmd.Flags().StringArrayVar(&releaseDeps, "dep", nil, "a package this release needs, as NAME@REQUIREMENT; repeatable")
 	releaseCmd.Flags().StringArrayVar(&releaseRequires, "requires", nil, "a host this release needs, as NAME@REQUIREMENT; repeatable")
 	releaseCmd.Flags().StringVarP(&releaseDescription, "description", "d", "", "what changed in this release")
+	releaseCmd.Flags().StringVar(&releaseRegistry, "registry", "", "registry to release to")
 
 	rootCmd.AddCommand(publishCmd, releaseCmd)
 }
