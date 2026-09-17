@@ -23,6 +23,7 @@ single Go binary with no runtime dependencies.
 | `GET` | `/packages` | none | Search. See the filters below. |
 | `POST` | `/packages` | token | `201`, or `409` when the name is taken. |
 | `GET` | `/packages/{package}` | none | One package with its releases, newest first. |
+| `DELETE` | `/packages/{package}` | session or token | Publisher only. `204`, or `409` when it has releases. |
 | `GET` | `/packages/{package}/releases` | none | Just the releases. |
 | `POST` | `/packages/{package}/releases` | token | Publisher only. `403` for anyone else. |
 | `GET` | `/packages/{package}/releases/{version}` | none | One release. |
@@ -37,6 +38,11 @@ No filter lists the newest packages. `limit` defaults to 50 and is capped at
 A package has a globally unique name and belongs to one platform, either
 `lumen` or `candela`. `POST /packages` takes `platform`, `name`, and
 `description`.
+
+`DELETE /packages/{package}` frees a name its publisher claimed and never
+released to, so a name taken by a mistaken run does not stay taken. A package
+with releases answers `409`: clients resolve against it, and a freed name is a
+name someone else can claim.
 
 A release carries the version, what it depends on, what it needs from its
 host, and one artifact per target. The registry stores no bytes: the publisher

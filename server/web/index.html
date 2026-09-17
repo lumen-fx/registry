@@ -147,10 +147,10 @@ button:focus-visible { outline: none; border-color: var(--flame); box-shadow: 0 
   background: var(--card); border: 1px solid var(--flame); border-radius: .5rem;
   padding: .7rem .8rem; margin: .5rem 0; word-break: break-all;
 }
-.token-row { display: flex; align-items: baseline; gap: .8rem; padding: .6rem 0; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
-.token-row .name { font-weight: 600; }
-.token-row time, .token-row .meta { color: var(--muted); font-size: .85rem; }
-.token-row button { margin-left: auto; padding: .2rem .7rem; font-size: .85rem; }
+.token-row, .pkg-row { display: flex; align-items: baseline; gap: .8rem; padding: .6rem 0; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.token-row .name, .pkg-row .name { font-weight: 600; }
+.token-row time, .token-row .meta, .pkg-row .meta { color: var(--muted); font-size: .85rem; }
+.token-row button, .pkg-row button { margin-left: auto; padding: .2rem .7rem; font-size: .85rem; }
 @media (prefers-reduced-motion: no-preference) {
   .lamp input, .lamp select { transition: box-shadow .15s ease, border-color .15s ease; }
 }
@@ -427,6 +427,50 @@ async function renderAccount() {
     route();
   });
 
+  const packagesLabel = el("div", "section-label", "Your packages");
+  const packagesHint = el("p", "byline",
+    "Delete frees a name you claimed and never published to. A package with " +
+    "releases stays, because installs resolve against it.");
+  const packages = el("div");
+
+  async function refreshPackages() {
+    try {
+      const mine = await fetchJSON("/users/" + encodeURIComponent(me.username) + "/packages");
+      packages.replaceChildren();
+      if (!mine || !mine.length) {
+        packages.append(el("p", "state", "Nothing published yet. Claim a name with lpm publish."));
+        return;
+      }
+      for (const pkg of mine) {
+        const row = el("div", "pkg-row");
+        const name = el("a", "name", pkg.name);
+        name.href = "#/p/" + encodeURIComponent(pkg.name);
+        row.append(name, badgeFor(pkg.platform));
+        const count = pkg.releases ? pkg.releases.length : 0;
+        row.append(el("span", "meta", count === 1 ? "1 release" : count + " releases"));
+        if (count === 0) {
+          const remove = el("button", "", "Delete");
+          remove.addEventListener("click", async () => {
+            if (!confirm("Delete " + pkg.name + "? The name goes free for anyone to claim.")) return;
+            const res = await fetch("/packages/" + encodeURIComponent(pkg.name), { method: "DELETE" });
+            if (!res.ok) {
+              const refused = await res.json().catch(() => null);
+              packages.append(el("p", "state", refused && refused.error
+                ? "Deleting " + pkg.name + ": " + refused.error
+                : "Deleting " + pkg.name + " failed. Retry in a moment."));
+              return;
+            }
+            refreshPackages();
+          });
+          row.append(remove);
+        }
+        packages.append(row);
+      }
+    } catch {
+      packages.replaceChildren(el("p", "state", "The registry did not respond. Retry in a moment."));
+    }
+  }
+
   const tokensLabel = el("div", "section-label", "API tokens");
   const hint = el("p", "byline",
     "A token authenticates lpm on this machine: run lpm login and paste it, or set LPM_TOKEN in CI. " +
@@ -492,7 +536,9 @@ async function renderAccount() {
     refresh();
   });
 
-  view.replaceChildren(crumb, h, signOut, tokensLabel, hint, mint, secretBox, list);
+  view.replaceChildren(crumb, h, signOut, packagesLabel, packagesHint, packages,
+    tokensLabel, hint, mint, secretBox, list);
+  await refreshPackages();
   await refresh();
 }
 

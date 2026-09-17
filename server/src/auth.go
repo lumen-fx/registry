@@ -293,18 +293,17 @@ func (s *Server) LogoutHandler(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, r, http.StatusOK, StatusResponse{Status: "signed out"})
 }
 
-// The session cookie serves the UI; a bearer token serves the CLI.
-func (s *Server) MeHandler(w http.ResponseWriter, r *http.Request) {
+// The session cookie serves the UI; a bearer token serves the CLI. Writes the
+// 401 itself. Callers only check ok.
+func (s *Server) sessionOrTokenAuth(w http.ResponseWriter, r *http.Request) (*User, bool) {
 	if strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ") {
-		user, ok := s.bearerAuth(w, r)
-		if !ok {
-			return
-		}
-		writeJSON(w, r, http.StatusOK, user.Public())
-		return
+		return s.bearerAuth(w, r)
 	}
+	return s.cookieAuth(w, r)
+}
 
-	user, ok := s.cookieAuth(w, r)
+func (s *Server) MeHandler(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.sessionOrTokenAuth(w, r)
 	if !ok {
 		return
 	}

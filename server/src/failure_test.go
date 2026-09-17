@@ -48,6 +48,7 @@ func TestDatabaseFailuresAnswer500(t *testing.T) {
 		{http.MethodPost, "/tokens", `{"name":"ci"}`, true, http.StatusInternalServerError},
 		{http.MethodDelete, "/tokens/11111111-1111-1111-1111-111111111111", "", true, http.StatusInternalServerError},
 		{http.MethodPost, "/packages", `{"platform":"lumen","name":"alice-tool"}`, true, http.StatusInternalServerError},
+		{http.MethodDelete, "/packages/alice-tool", "", true, http.StatusInternalServerError},
 		{http.MethodPost, "/packages/alice-tool/releases", `{"version":"1.0.0","artifacts":[{"target":"any","url":"https://example.test/x.tgz","sha256":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","size":4}]}`, true, http.StatusInternalServerError},
 	} {
 		var body *strings.Reader
@@ -135,6 +136,8 @@ func TestStoreFailuresAreWrapped(t *testing.T) {
 	_, err = s.publishRelease(ctx, publisher, packaged, NewRelease{Version: "1.0.0"})
 	add("publishRelease", err)
 
+	add("deletePackage", s.deletePackage(ctx, publisher, packaged))
+
 	for _, c := range calls {
 		if c.err == nil {
 			t.Errorf("%s returned nil, want a query error", c.name)
@@ -165,8 +168,8 @@ func TestAttachReleasesWithNoPackages(t *testing.T) {
 	}
 }
 
-// TestPublishReleaseRejectsAnotherPublisher covers the ownership check before
-// any query runs.
+// TestPublishReleaseRejectsAnotherPublisher covers the ownership checks that
+// run before any query.
 func TestPublishReleaseRejectsAnotherPublisher(t *testing.T) {
 	s := NewServer(deadPool(t))
 
@@ -178,6 +181,10 @@ func TestPublishReleaseRejectsAnotherPublisher(t *testing.T) {
 
 	if !errors.Is(err, ErrNotPublisher) {
 		t.Errorf("err = %v, want ErrNotPublisher", err)
+	}
+
+	if err := s.deletePackage(context.Background(), publisher, packaged); !errors.Is(err, ErrNotPublisher) {
+		t.Errorf("delete err = %v, want ErrNotPublisher", err)
 	}
 }
 
