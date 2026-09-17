@@ -113,6 +113,12 @@ func (c *Client) CreateRelease(packageName string, rel NewRelease) (Release, err
 	return created, err
 }
 
+// DeletePackage frees a name whose package has no releases. The registry
+// refuses it for anyone but the publisher, and for a package with releases.
+func (c *Client) DeletePackage(name string) error {
+	return c.do(http.MethodDelete, "/packages/"+url.PathEscape(name), nil, nil)
+}
+
 // GetPackage reads one package with every release it has published. This is
 // what resolution runs on: one request per package name, not one per version.
 func (c *Client) GetPackage(name string) (Package, error) {
