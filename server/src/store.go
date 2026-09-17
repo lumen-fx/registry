@@ -22,6 +22,7 @@ var ErrReleaseNotFound = errors.New("release not found")
 var ErrPackageExists = errors.New("package already exists")
 var ErrReleaseExists = errors.New("release already exists")
 var ErrNotPublisher = errors.New("not the package publisher")
+var ErrPackageHasReleases = errors.New("package has releases")
 
 // upsertGitHubUser creates the account on first sign-in and follows GitHub
 // renames afterwards; github_id is the identity, username the display name.
@@ -337,6 +338,27 @@ func (s *Server) publishPackage(ctx context.Context, publisher User, packaged Ne
 
 	createdPackage.Releases = []Release{} // [] reads better than null
 	return &createdPackage, nil
+}
+
+// deletePackage frees a name its publisher claimed and never released to. The
+// release check rides inside the delete, so a release published alongside it
+// keeps the package: the statement then matches no row.
+func (s *Server) deletePackage(ctx context.Context, publisher User, packaged Package) error {
+	if packaged.PublisherID != publisher.ID {
+		return ErrNotPublisher
+	}
+
+	tag, err := s.db.Exec(ctx,
+		`DELETE FROM packages
+		 WHERE id = $1
+		   AND NOT EXISTS (SELECT 1 FROM releases WHERE package_id = packages.id)`, packaged.ID)
+	if err != nil {
+		return fmt.Errorf("delete package: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrPackageHasReleases
+	}
+	return nil
 }
 
 // publishRelease writes the release and its artifacts together, so a release

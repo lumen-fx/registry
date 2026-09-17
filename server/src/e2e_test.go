@@ -326,7 +326,7 @@ func TestE2EUnroutedAndMethods(t *testing.T) {
 		{http.MethodDelete, "/tokens", "GET, POST, HEAD, OPTIONS"},
 		{http.MethodGet, "/tokens/anything", "DELETE, OPTIONS"},
 		{http.MethodDelete, "/packages", "GET, POST, HEAD, OPTIONS"},
-		{http.MethodDelete, "/packages/anything", "GET, HEAD, OPTIONS"},
+		{http.MethodPut, "/packages/anything", "GET, DELETE, HEAD, OPTIONS"},
 		{http.MethodDelete, "/packages/anything/releases", "GET, POST, HEAD, OPTIONS"},
 		{http.MethodDelete, "/packages/anything/releases/1.0.0", "GET, HEAD, OPTIONS"},
 		{http.MethodDelete, "/users/anyone", "GET, HEAD, OPTIONS"},
@@ -577,6 +577,42 @@ func TestE2EWrongTokenCannotPublish(t *testing.T) {
 
 	a.expect(http.StatusUnauthorized, http.MethodPost, "/packages",
 		`{"platform":"lumen","name":"alice-tool"}`, "lpm_bad-token")
+}
+
+func TestE2EDeletePackage(t *testing.T) {
+	a := newAPI(t)
+	alice := a.signup("alice")
+	bob := a.signup("bob")
+
+	a.publish(alice.Token, "alice-spare")
+	a.publish(alice.Token, "alice-tool")
+	a.release(alice.Token, "alice-tool", "1.0.0")
+
+	a.expect(http.StatusNotFound, http.MethodDelete, "/packages/nothing-here", "", alice.Token)
+	a.expect(http.StatusForbidden, http.MethodDelete, "/packages/alice-spare", "", bob.Token)
+
+	res := a.expect(http.StatusConflict, http.MethodDelete, "/packages/alice-tool", "", alice.Token)
+	if !strings.Contains(res.body, "cannot be deleted") {
+		t.Errorf("body = %q, want the releases conflict", res.body)
+	}
+	a.expect(http.StatusOK, http.MethodGet, "/packages/alice-tool", "")
+
+	res = a.expect(http.StatusNoContent, http.MethodDelete, "/packages/alice-spare", "", alice.Token)
+	if res.body != "" {
+		t.Errorf("204 body = %q, want none", res.body)
+	}
+	a.expect(http.StatusNotFound, http.MethodGet, "/packages/alice-spare", "")
+
+	// The name is free again, and the account page deletes on its session.
+	a.publish(bob.Token, "alice-spare")
+	if got := a.do(http.MethodDelete, "/packages/alice-spare", "", "", bob.Session); got.status != http.StatusNoContent {
+		t.Errorf("session delete = %d, want 204: %s", got.status, got.body)
+	}
+
+	a.publish(alice.Token, "alice-spare")
+	if got := a.do(http.MethodDelete, "/packages/alice-spare", "", "", ""); got.status != http.StatusUnauthorized {
+		t.Errorf("anonymous delete = %d, want 401", got.status)
+	}
 }
 
 func TestE2EGetPackage(t *testing.T) {

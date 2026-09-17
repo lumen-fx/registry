@@ -61,7 +61,8 @@ func (s *Server) Routes() *http.ServeMux {
 	mux.HandleFunc("/packages", methodNotAllowed(http.MethodGet, http.MethodPost))
 
 	mux.HandleFunc("GET /packages/{package}", s.GetPackageHandler)
-	mux.HandleFunc("/packages/{package}", methodNotAllowed(http.MethodGet))
+	mux.HandleFunc("DELETE /packages/{package}", s.DeletePackageHandler)
+	mux.HandleFunc("/packages/{package}", methodNotAllowed(http.MethodGet, http.MethodDelete))
 
 	mux.HandleFunc("GET /packages/{package}/releases", s.PackageReleasesHandler)
 	mux.HandleFunc("POST /packages/{package}/releases", s.PublishReleaseHandler)

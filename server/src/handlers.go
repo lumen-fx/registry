@@ -193,6 +193,40 @@ func (s *Server) PublishPackageHandler(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, r, http.StatusCreated, packaged)
 }
 
+// The name goes free only while nothing depends on it, so a package with
+// releases stays and answers 409. The account page and lpm both call this.
+func (s *Server) DeletePackageHandler(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.sessionOrTokenAuth(w, r)
+	if !ok {
+		return
+	}
+
+	packaged, err := s.getPackageRow(r.Context(), r.PathValue("package"))
+	switch {
+	case errors.Is(err, ErrPackageNotFound):
+		writeError(w, r, http.StatusNotFound, "package doesn't exist")
+		return
+	case err != nil:
+		writeServerError(w, r, "get package", err)
+		return
+	}
+
+	err = s.deletePackage(r.Context(), *user, *packaged)
+	switch {
+	case errors.Is(err, ErrNotPublisher):
+		writeError(w, r, http.StatusForbidden, "only the package publisher may delete it")
+		return
+	case errors.Is(err, ErrPackageHasReleases):
+		writeError(w, r, http.StatusConflict, "a package with releases cannot be deleted")
+		return
+	case err != nil:
+		writeServerError(w, r, "delete package", err)
+		return
+	}
+
+	writeJSON(w, r, http.StatusNoContent, nil)
+}
+
 func (s *Server) PublishReleaseHandler(w http.ResponseWriter, r *http.Request) {
 	user, ok := s.bearerAuth(w, r)
 	if !ok {
