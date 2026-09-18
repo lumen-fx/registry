@@ -37,7 +37,9 @@ No filter lists the newest packages. `limit` defaults to 50 and is capped at
 
 A package has a globally unique name and belongs to one platform, either
 `lumen` or `candela`. `POST /packages` takes `platform`, `name`, and
-`description`.
+`description`, and answers `201`. The publisher who holds a name posts it again
+to change the description and gets `200` with the package; anyone else gets
+`409`. The platform is fixed by the first claim.
 
 `DELETE /packages/{package}` frees a name its publisher claimed and never
 released to, so a name taken by a mistaken run does not stay taken. A package

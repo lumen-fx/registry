@@ -557,7 +557,27 @@ func TestE2EPublishPackage(t *testing.T) {
 		t.Errorf("session publish = %d, want 401", got.status)
 	}
 
-	// A name is taken globally, not per platform.
+	// The publisher claims the name again to change the description, and gets
+	// the same package back.
+	var again Package
+	a.expect(http.StatusOK, http.MethodPost, "/packages",
+		`{"platform":"lumen","name":"alice-tool","description":"a better tool"}`, acct.Token).json(t, &again)
+	if again.ID != pkg.ID || again.Description != "a better tool" {
+		t.Errorf("republished package = %+v, want the same package with the new description", again)
+	}
+	var shown Package
+	a.expect(http.StatusOK, http.MethodGet, "/packages/alice-tool", "").json(t, &shown)
+	if shown.Description != "a better tool" {
+		t.Errorf("package description = %q after republish, want the new one", shown.Description)
+	}
+
+	// Anyone else finds the name taken.
+	bob := a.signup("bob")
+	a.expect(http.StatusConflict, http.MethodPost, "/packages",
+		`{"platform":"lumen","name":"alice-tool","description":"mine now"}`, bob.Token)
+
+	// A name is taken globally, not per platform, and the platform is not
+	// something a second claim changes.
 	a.expect(http.StatusConflict, http.MethodPost, "/packages",
 		`{"platform":"candela","name":"alice-tool"}`, acct.Token)
 

@@ -130,7 +130,7 @@ func TestStoreFailuresAreWrapped(t *testing.T) {
 	_, err = s.getRelease(ctx, "alice-tool", "1.0.0")
 	add("getRelease", err)
 
-	_, err = s.publishPackage(ctx, publisher, NewPackage{Platform: "lumen", Name: "alice-tool"})
+	_, _, err = s.publishPackage(ctx, publisher, NewPackage{Platform: "lumen", Name: "alice-tool"})
 	add("publishPackage", err)
 
 	_, err = s.publishRelease(ctx, publisher, packaged, NewRelease{Version: "1.0.0"})

@@ -315,29 +315,45 @@ func (s *Server) getRelease(ctx context.Context, name string, version string) (*
 	return &releases[0], nil
 }
 
-func (s *Server) publishPackage(ctx context.Context, publisher User, packaged NewPackage) (*Package, error) {
+// publishPackage claims a name for its publisher. The publisher who holds a
+// name can claim it again to change its description: a manifest-driven release
+// claims on every run with whatever the manifest says now, so the second claim
+// is how an edited description reaches the registry. Anyone else finds the
+// name taken. The platform is part of the claim and does not change.
+func (s *Server) publishPackage(ctx context.Context, publisher User, packaged NewPackage) (*Package, bool, error) {
 	rows, err := s.db.Query(ctx,
-		`INSERT INTO packages (publisher_id, platform, name, description) VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING RETURNING `+packageColumns,
+		`INSERT INTO packages (publisher_id, platform, name, description) VALUES ($1, $2, $3, $4)
+		 ON CONFLICT (name) DO UPDATE SET description = EXCLUDED.description
+		 WHERE packages.publisher_id = EXCLUDED.publisher_id AND packages.platform = EXCLUDED.platform
+		 RETURNING `+packageColumns+`, (xmax = 0) AS created`,
 		publisher.ID,
 		packaged.Platform,
 		packaged.Name,
 		packaged.Description,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("insert package: %w", err)
+		return nil, false, fmt.Errorf("insert package: %w", err)
 	}
 
-	// A conflict returns no rows, so no rows means duplicate.
-	createdPackage, err := pgx.CollectExactlyOneRow(rows, pgx.RowToStructByName[Package])
+	// A conflict the WHERE clause rejects returns no rows, so no rows means
+	// the name belongs to someone else or to another platform.
+	claimed, err := pgx.CollectExactlyOneRow(rows, pgx.RowToStructByName[claimedPackage])
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, ErrPackageExists
+		return nil, false, ErrPackageExists
 	}
 	if err != nil {
-		return nil, fmt.Errorf("collect package: %w", err)
+		return nil, false, fmt.Errorf("collect package: %w", err)
 	}
 
-	createdPackage.Releases = []Release{} // [] reads better than null
-	return &createdPackage, nil
+	claimed.Releases = []Release{} // [] reads better than null
+	return &claimed.Package, claimed.Created, nil
+}
+
+// claimedPackage is a package row plus whether the claim inserted it. xmax is
+// zero on a row the statement inserted and set on one it updated.
+type claimedPackage struct {
+	Package
+	Created bool `db:"created"`
 }
 
 // deletePackage frees a name its publisher claimed and never released to. The
