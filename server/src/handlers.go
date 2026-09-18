@@ -180,7 +180,7 @@ func (s *Server) PublishPackageHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	packaged, err := s.publishPackage(r.Context(), *user, newPackage)
+	packaged, created, err := s.publishPackage(r.Context(), *user, newPackage)
 	switch {
 	case errors.Is(err, ErrPackageExists):
 		writeError(w, r, http.StatusConflict, "package name is already taken")
@@ -190,7 +190,11 @@ func (s *Server) PublishPackageHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, r, http.StatusCreated, packaged)
+	status := http.StatusOK
+	if created {
+		status = http.StatusCreated
+	}
+	writeJSON(w, r, status, packaged)
 }
 
 // The name goes free only while nothing depends on it, so a package with

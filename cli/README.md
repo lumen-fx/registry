@@ -127,8 +127,9 @@ lpm release NAME VERSION --artifact TARGET=URL... [--dep NAME@REQUIREMENT]...
 lpm delete NAME [--registry URL]
 ```
 
-`publish` claims a name; names are unique across the whole registry. `release`
-adds one version to a package you own.
+`publish` claims a name; names are unique across the whole registry. Publishing
+a name you already hold changes its description. `release` adds one version to
+a package you own.
 
 You host the archives and the registry records where they are. `release`
 downloads every artifact, hashes it, and publishes the digest and the size with
