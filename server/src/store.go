@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -441,4 +442,189 @@ func (s *Server) publishRelease(ctx context.Context, publisher User, packaged Pa
 	}
 
 	return &createdRelease, nil
+}
+
+const readmeColumns = `release_id, markdown, source_url, status, fetched_at, checked_at`
+
+var ErrReadmeNotCached = errors.New("readme not cached")
+
+// The states a readme fetch ends in. status describes the last attempt, so a
+// row can be statusUnavailable and still hold the markdown from before the
+// failure.
+const (
+	statusOK          = "ok"
+	statusMissing     = "missing"
+	statusUnavailable = "unavailable"
+)
+
+// readmeCache is one row of the README cache. It is not part of the API: a
+// reader gets Readme, which leaves out how the copy was obtained.
+type readmeCache struct {
+	ReleaseID uuid.UUID  `db:"release_id"`
+	Markdown  string     `db:"markdown"`
+	SourceURL string     `db:"source_url"`
+	Status    string     `db:"status"`
+	FetchedAt *time.Time `db:"fetched_at"`
+	CheckedAt time.Time  `db:"checked_at"`
+}
+
+func (s *Server) getReadme(ctx context.Context, releaseID uuid.UUID) (*readmeCache, error) {
+	rows, err := s.db.Query(ctx,
+		`SELECT `+readmeColumns+` FROM release_readmes WHERE release_id = $1`, releaseID)
+	if err != nil {
+		return nil, fmt.Errorf("get readme: %w", err)
+	}
+
+	entry, err := pgx.CollectExactlyOneRow(rows, pgx.RowToStructByName[readmeCache])
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrReadmeNotCached
+	}
+	if err != nil {
+		return nil, fmt.Errorf("collect readme: %w", err)
+	}
+
+	return &entry, nil
+}
+
+// saveReadme records the outcome of one attempt. A failed attempt passes the
+// markdown the row already held, so the last good README survives it.
+func (s *Server) saveReadme(ctx context.Context, entry readmeCache) error {
+	_, err := s.db.Exec(ctx,
+		`INSERT INTO release_readmes (release_id, markdown, source_url, status, fetched_at, checked_at)
+		 VALUES ($1, $2, $3, $4, $5, now())
+		 ON CONFLICT (release_id) DO UPDATE SET
+		     markdown   = EXCLUDED.markdown,
+		     source_url = EXCLUDED.source_url,
+		     status     = EXCLUDED.status,
+		     fetched_at = EXCLUDED.fetched_at,
+		     checked_at = now()`,
+		entry.ReleaseID, entry.Markdown, entry.SourceURL, entry.Status, entry.FetchedAt)
+	if err != nil {
+		return fmt.Errorf("save readme: %w", err)
+	}
+	return nil
+}
+
+// saveDownloadSnapshot records one artifact's counter for one day. A second
+// run on the same day replaces the sample rather than adding one, so the
+// chart does not depend on how often the collector ran.
+func (s *Server) saveDownloadSnapshot(ctx context.Context, artifactID uuid.UUID, day time.Time, count int64) error {
+	_, err := s.db.Exec(ctx,
+		`INSERT INTO download_snapshots (artifact_id, day, count)
+		 VALUES ($1, $2, $3)
+		 ON CONFLICT (artifact_id, day) DO UPDATE SET count = EXCLUDED.count`,
+		artifactID, day, count)
+	if err != nil {
+		return fmt.Errorf("save download snapshot: %w", err)
+	}
+	return nil
+}
+
+// packageDownloads reads the newest sample of every artifact for the total,
+// and the rise between consecutive samples for the daily series. A counter
+// that falls, which is what replacing an asset looks like, contributes
+// nothing rather than a negative day.
+func (s *Server) packageDownloads(ctx context.Context, packageID uuid.UUID) (Downloads, error) {
+	downloads := Downloads{Days: []DownloadDay{}}
+
+	err := s.db.QueryRow(ctx,
+		`SELECT COALESCE(SUM(newest.count), 0)::bigint, MAX(newest.day)
+		 FROM (
+		     SELECT DISTINCT ON (s.artifact_id) s.artifact_id, s.count, s.day
+		     FROM download_snapshots s
+		     JOIN artifacts a ON a.id = s.artifact_id
+		     JOIN releases  r ON r.id = a.release_id
+		     WHERE r.package_id = $1
+		     ORDER BY s.artifact_id, s.day DESC
+		 ) newest`, packageID).Scan(&downloads.Total, &downloads.SampledAt)
+	if err != nil {
+		return Downloads{}, fmt.Errorf("sum downloads: %w", err)
+	}
+
+	rows, err := s.db.Query(ctx,
+		`SELECT to_char(day, 'YYYY-MM-DD') AS day, SUM(delta)::bigint AS count
+		 FROM (
+		     SELECT s.day,
+		            s.count - LAG(s.count) OVER (PARTITION BY s.artifact_id ORDER BY s.day) AS delta
+		     FROM download_snapshots s
+		     JOIN artifacts a ON a.id = s.artifact_id
+		     JOIN releases  r ON r.id = a.release_id
+		     WHERE r.package_id = $1
+		 ) daily
+		 WHERE delta IS NOT NULL AND delta >= 0
+		 GROUP BY day
+		 ORDER BY day`, packageID)
+	if err != nil {
+		return Downloads{}, fmt.Errorf("list downloads: %w", err)
+	}
+
+	days, err := pgx.CollectRows(rows, pgx.RowToStructByName[DownloadDay])
+	if err != nil {
+		return Downloads{}, fmt.Errorf("collect downloads: %w", err)
+	}
+	if len(days) > 0 {
+		downloads.Days = days
+	}
+
+	return downloads, nil
+}
+
+// collectTarget is one release the collector visits. Newest marks the release
+// a package page shows, which is the only one whose README is worth reading.
+type collectTarget struct {
+	PackageName string
+	Release     Release
+	Newest      bool
+}
+
+// collectTargets lists every release in the registry, newest first within each
+// package. The collector walks all of them: downloads accumulate against every
+// version a package has ever published, not just the current one.
+func (s *Server) collectTargets(ctx context.Context) ([]collectTarget, error) {
+	rows, err := s.db.Query(ctx,
+		`SELECT `+releaseColumns+` FROM releases ORDER BY package_id, created_at DESC, id`)
+	if err != nil {
+		return nil, fmt.Errorf("list releases: %w", err)
+	}
+
+	releases, err := pgx.CollectRows(rows, pgx.RowToStructByName[Release])
+	if err != nil {
+		return nil, fmt.Errorf("collect releases: %w", err)
+	}
+
+	if err := s.attachArtifacts(ctx, releases); err != nil {
+		return nil, err
+	}
+
+	names, err := s.db.Query(ctx, `SELECT id, name FROM packages`)
+	if err != nil {
+		return nil, fmt.Errorf("list package names: %w", err)
+	}
+	defer names.Close()
+
+	byID := map[uuid.UUID]string{}
+	for names.Next() {
+		var id uuid.UUID
+		var name string
+		if err := names.Scan(&id, &name); err != nil {
+			return nil, fmt.Errorf("scan package name: %w", err)
+		}
+		byID[id] = name
+	}
+	if err := names.Err(); err != nil {
+		return nil, fmt.Errorf("read package names: %w", err)
+	}
+
+	targets := make([]collectTarget, 0, len(releases))
+	var previous uuid.UUID
+	for _, release := range releases {
+		targets = append(targets, collectTarget{
+			PackageName: byID[release.PackageID],
+			Release:     release,
+			Newest:      release.PackageID != previous,
+		})
+		previous = release.PackageID
+	}
+
+	return targets, nil
 }

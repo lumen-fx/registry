@@ -11,6 +11,13 @@ kind: Kustomization
 #     --from-literal=GITHUB_CLIENT_ID=<id> \
 #     --from-literal=GITHUB_CLIENT_SECRET=<secret>
 #   kubectl apply -k k8s/overlays/prod
+#
+# The daily collector reads public repositories, so it works without
+# credentials at sixty calls an hour. Give it a read-only token when the
+# registry outgrows that:
+#
+#   kubectl -n lpm create secret generic lpm-github-token \
+#     --from-literal=GITHUB_TOKEN=<token>
 
 resources:
   - ../../base

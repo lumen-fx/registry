@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/lumen-fx/registry/server/web"
@@ -29,6 +30,32 @@ func (s *Server) InstallScriptHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache")
 	w.WriteHeader(http.StatusOK)
 	w.Write(web.InstallScript)
+}
+
+// Serves the browser libraries the README panel renders markdown with. The
+// version is in the file name, so these never change under a reader and are
+// cached for good.
+func (s *Server) AssetHandler(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("asset")
+
+	// The route matches one path segment, so a name cannot walk out of the
+	// directory. Only the scripts are served; the licences beside them ship in
+	// the repository, not over HTTP.
+	if !strings.HasSuffix(name, ".js") {
+		notFound(w, r)
+		return
+	}
+
+	asset, err := web.Assets.ReadFile("assets/" + name)
+	if err != nil {
+		notFound(w, r)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	w.WriteHeader(http.StatusOK)
+	w.Write(asset)
 }
 
 func (s *Server) HealthCheckHandler(w http.ResponseWriter, r *http.Request) {
@@ -270,4 +297,60 @@ func (s *Server) PublishReleaseHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, r, http.StatusCreated, release)
+}
+
+// The README belongs to the publisher, not the registry: it is read from the
+// repository the newest release's artifacts point at, and cached. A package
+// that documents nothing answers 404, which is how the UI knows to show no
+// panel rather than an empty one.
+func (s *Server) PackageReadmeHandler(w http.ResponseWriter, r *http.Request) {
+	packaged, err := s.getPackage(r.Context(), r.PathValue("package"))
+	switch {
+	case errors.Is(err, ErrPackageNotFound):
+		writeError(w, r, http.StatusNotFound, "package doesn't exist")
+		return
+	case err != nil:
+		writeServerError(w, r, "get package", err)
+		return
+	}
+
+	if len(packaged.Releases) == 0 {
+		writeError(w, r, http.StatusNotFound, "package has no releases")
+		return
+	}
+
+	readme, err := s.readmeFor(r.Context(), packaged.Releases[0], false)
+	if err != nil {
+		writeServerError(w, r, "get readme", err)
+		return
+	}
+	if readme == nil {
+		writeError(w, r, http.StatusNotFound, "package has no readme")
+		return
+	}
+
+	writeJSON(w, r, http.StatusOK, readme)
+}
+
+// Downloads are of the archives on GitHub, counted by GitHub. The registry
+// samples that counter daily, so the total covers the package's whole life
+// while the daily series starts when sampling did.
+func (s *Server) PackageDownloadsHandler(w http.ResponseWriter, r *http.Request) {
+	packaged, err := s.getPackageRow(r.Context(), r.PathValue("package"))
+	switch {
+	case errors.Is(err, ErrPackageNotFound):
+		writeError(w, r, http.StatusNotFound, "package doesn't exist")
+		return
+	case err != nil:
+		writeServerError(w, r, "get package", err)
+		return
+	}
+
+	downloads, err := s.packageDownloads(r.Context(), packaged.ID)
+	if err != nil {
+		writeServerError(w, r, "get downloads", err)
+		return
+	}
+
+	writeJSON(w, r, http.StatusOK, downloads)
 }

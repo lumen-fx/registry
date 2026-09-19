@@ -9,6 +9,7 @@ resources:
   - bootstrap-secret.yaml
   - postgres.yaml
   - migration-job.yaml
+  - collect-cronjob.yaml
   - deployment.yaml
   - service.yaml
   - ingress.yaml

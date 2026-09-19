@@ -131,3 +131,34 @@ type NewRelease struct {
 	Requires     Requirements  `json:"requires"`
 	Artifacts    []NewArtifact `json:"artifacts"`
 }
+
+// Readme is a package's README as it stood at the tag its newest release was
+// cut from. The registry caches what GitHub served; source links the file it
+// came from, and stale says the last refresh failed and this is the copy from
+// before it did.
+type Readme struct {
+	Version   string     `json:"version"`
+	Markdown  string     `json:"markdown"`
+	Source    string     `json:"source"`
+	FetchedAt *time.Time `json:"fetchedAt"`
+	Stale     bool       `json:"stale"`
+}
+
+// DownloadDay is one day's downloads: the rise in GitHub's counter between two
+// samples. A day the collector did not run carries no row, and the day after
+// it carries the whole gap.
+type DownloadDay struct {
+	Day   string `json:"day" db:"day"`
+	Count int64  `json:"count" db:"count"`
+}
+
+// Downloads counts downloads of a package's release assets on GitHub, which is
+// not the same as installs: a browser, a mirror, or a CI job fetching the
+// archive is in the number too. Total is the newest sample of every artifact
+// the package has ever released, so it covers the whole history; days only
+// covers what has been sampled here.
+type Downloads struct {
+	Total     int64         `json:"total"`
+	Days      []DownloadDay `json:"days"`
+	SampledAt *time.Time    `json:"sampledAt"`
+}
