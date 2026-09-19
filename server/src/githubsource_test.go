@@ -1,6 +1,13 @@
 package src
 
 import (
+	"context"
+	"encoding/base64"
+	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -108,5 +115,175 @@ func TestReadmeExpiry(t *testing.T) {
 		if got := readmeExpired(entry, now); got != c.want {
 			t.Errorf("%s after %s: expired = %v, want %v", c.status, c.age, got, c.want)
 		}
+	}
+}
+
+// stubSource wires a githubSource at a test server, the way production wires
+// it at api.github.com.
+func stubSource(t *testing.T, handler http.HandlerFunc) githubSource {
+	t.Helper()
+
+	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
+
+	return githubSource{apiURL: server.URL, token: "test-token", client: server.Client()}
+}
+
+func readmePayload(markdown string) string {
+	return fmt.Sprintf(`{"content":%q,"encoding":"base64","html_url":"https://github.com/o/r/blob/v1/README.md"}`,
+		base64.StdEncoding.EncodeToString([]byte(markdown)))
+}
+
+var testRef = releaseRef{Owner: "o", Repo: "r", Tag: "v1"}
+
+func TestReadmeIsReadAtTheTag(t *testing.T) {
+	var asked *http.Request
+	source := stubSource(t, func(w http.ResponseWriter, r *http.Request) {
+		asked = r
+		fmt.Fprint(w, readmePayload("# hello"))
+	})
+
+	markdown, url, err := source.readme(context.Background(), testRef)
+	if err != nil {
+		t.Fatalf("readme: %v", err)
+	}
+	if markdown != "# hello" {
+		t.Errorf("markdown = %q", markdown)
+	}
+	if url != "https://github.com/o/r/blob/v1/README.md" {
+		t.Errorf("source = %q", url)
+	}
+	if got := asked.URL.Query().Get("ref"); got != "v1" {
+		t.Errorf("ref = %q, want the release tag", got)
+	}
+	// A token lifts the anonymous rate limit, and only a sent one does.
+	if got := asked.Header.Get("Authorization"); got != "Bearer test-token" {
+		t.Errorf("Authorization = %q", got)
+	}
+}
+
+// Everything GitHub can answer that is not a README, and what each one means
+// to a reader: nothing to show, or something worth retrying.
+func TestReadmeFailures(t *testing.T) {
+	oversized := strings.Repeat("a", readmeMaxBytes+1)
+
+	cases := []struct {
+		name    string
+		status  int
+		headers map[string]string
+		body    string
+		want    error
+	}{
+		{name: "no readme", status: http.StatusNotFound, want: ErrNoReadme},
+		{name: "too large for the api", status: http.StatusOK, body: `{"content":"","encoding":"none"}`, want: ErrNoReadme},
+		{name: "too large to render", status: http.StatusOK, body: readmePayload(oversized), want: ErrNoReadme},
+		{name: "not text", status: http.StatusOK, body: `{"content":"//4=","encoding":"base64"}`, want: ErrNoReadme},
+		{
+			name:    "rate limited",
+			status:  http.StatusForbidden,
+			headers: map[string]string{"X-RateLimit-Remaining": "0"},
+			want:    ErrGitHubLimited,
+		},
+		{name: "server error", status: http.StatusBadGateway},
+		{name: "not json", status: http.StatusOK, body: `{`},
+		{name: "not base64", status: http.StatusOK, body: `{"content":"!!!","encoding":"base64"}`},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			source := stubSource(t, func(w http.ResponseWriter, r *http.Request) {
+				for k, v := range c.headers {
+					w.Header().Set(k, v)
+				}
+				w.WriteHeader(c.status)
+				fmt.Fprint(w, c.body)
+			})
+
+			_, _, err := source.readme(context.Background(), testRef)
+			if err == nil {
+				t.Fatal("readme returned no error")
+			}
+			if c.want != nil && !errors.Is(err, c.want) {
+				t.Errorf("error = %v, want %v", err, c.want)
+			}
+		})
+	}
+}
+
+func TestAssetDownloads(t *testing.T) {
+	source := stubSource(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/repos/o/r/releases/tags/v1" {
+			t.Errorf("path = %q", r.URL.Path)
+		}
+		fmt.Fprint(w, `{"assets":[{"name":"pkg.tgz","download_count":7},{"name":"other.tgz","download_count":0}]}`)
+	})
+
+	counts, err := source.assetDownloads(context.Background(), testRef)
+	if err != nil {
+		t.Fatalf("assetDownloads: %v", err)
+	}
+	if counts["pkg.tgz"] != 7 || counts["other.tgz"] != 0 || len(counts) != 2 {
+		t.Errorf("counts = %v", counts)
+	}
+}
+
+func TestAssetDownloadsFailures(t *testing.T) {
+	cases := []struct {
+		name    string
+		status  int
+		headers map[string]string
+		body    string
+		want    error
+	}{
+		{name: "no such release", status: http.StatusNotFound, want: ErrNoGitHubRef},
+		{
+			name:    "rate limited",
+			status:  http.StatusTooManyRequests,
+			headers: map[string]string{"X-RateLimit-Remaining": "0"},
+			want:    ErrGitHubLimited,
+		},
+		{name: "server error", status: http.StatusBadGateway},
+		{name: "not json", status: http.StatusOK, body: `{"assets":`},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			source := stubSource(t, func(w http.ResponseWriter, r *http.Request) {
+				for k, v := range c.headers {
+					w.Header().Set(k, v)
+				}
+				w.WriteHeader(c.status)
+				fmt.Fprint(w, c.body)
+			})
+
+			_, err := source.assetDownloads(context.Background(), testRef)
+			if err == nil {
+				t.Fatal("assetDownloads returned no error")
+			}
+			if c.want != nil && !errors.Is(err, c.want) {
+				t.Errorf("error = %v, want %v", err, c.want)
+			}
+		})
+	}
+}
+
+// An unreachable GitHub is an error, not an empty answer.
+func TestGitHubUnreachable(t *testing.T) {
+	source := githubSource{apiURL: "http://127.0.0.1:1", client: &http.Client{Timeout: time.Second}}
+
+	if _, _, err := source.readme(context.Background(), testRef); err == nil {
+		t.Error("readme returned nil against an unreachable host")
+	}
+	if _, err := source.assetDownloads(context.Background(), testRef); err == nil {
+		t.Error("assetDownloads returned nil against an unreachable host")
+	}
+}
+
+// An address the request cannot even be built for fails before any call.
+func TestGitHubRejectsAnUnusableURL(t *testing.T) {
+	source := githubSource{apiURL: "://", client: http.DefaultClient}
+
+	if _, _, err := source.readme(context.Background(), testRef); err == nil {
+		t.Error("readme returned nil for an unusable base url")
 	}
 }

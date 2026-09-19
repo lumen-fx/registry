@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"sync"
@@ -19,6 +20,7 @@ type githubStub struct {
 	readmes map[string]string
 	assets  map[string]map[string]int64
 	down    bool
+	limited bool
 	calls   int
 }
 
@@ -56,6 +58,14 @@ func (g *githubStub) setDown(down bool) {
 	g.down = down
 }
 
+// setLimited spends the rate limit, which GitHub reports as a refusal with
+// nothing left on the counter.
+func (g *githubStub) setLimited(limited bool) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.limited = limited
+}
+
 func (g *githubStub) callCount() int {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -68,6 +78,11 @@ func (g *githubStub) register(mux *http.ServeMux) {
 		g.mu.Lock()
 		defer g.mu.Unlock()
 		g.calls++
+		if g.limited {
+			w.Header().Set("X-RateLimit-Remaining", "0")
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
 		if g.down {
 			w.WriteHeader(http.StatusInternalServerError)
 			return
@@ -92,6 +107,11 @@ func (g *githubStub) register(mux *http.ServeMux) {
 		g.mu.Lock()
 		defer g.mu.Unlock()
 		g.calls++
+		if g.limited {
+			w.Header().Set("X-RateLimit-Remaining", "0")
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
 		if g.down {
 			w.WriteHeader(http.StatusInternalServerError)
 			return
@@ -339,5 +359,54 @@ func TestE2ECollectRefreshesTheReadme(t *testing.T) {
 	res.json(t, &readme)
 	if readme.Markdown != "# strutil" {
 		t.Errorf("markdown = %q", readme.Markdown)
+	}
+}
+
+// A spent rate limit stops the pass: every call left would fail the same way,
+// and what was already sampled stays.
+func TestE2ECollectStopsOnASpentRateLimit(t *testing.T) {
+	a := newAPI(t)
+	owner := a.signup("publisher")
+	a.publish(owner.Token, "strutil")
+	a.releaseOnGitHub(owner.Token, "strutil", "1.0.0", "lumen-fx", "strutil", "v1.0.0", "strutil.tgz")
+	a.github.setLimited(true)
+
+	err := Collect(context.Background(), discardLogger(), testPool)
+	if !errors.Is(err, ErrGitHubLimited) {
+		t.Fatalf("collect = %v, want the rate limit", err)
+	}
+}
+
+// A release the publisher rewrote no longer carries the file the registry
+// points at. The pass keeps going and the old samples stand; a new one would
+// be a guess.
+func TestE2ECollectSkipsWhatItCannotSample(t *testing.T) {
+	a := newAPI(t)
+	owner := a.signup("publisher")
+
+	// Hosted outside GitHub: nothing to ask about.
+	a.publish(owner.Token, "elsewhere")
+	a.release(owner.Token, "elsewhere", "1.0.0")
+
+	// On GitHub, but the tag is gone.
+	a.publish(owner.Token, "retagged")
+	a.releaseOnGitHub(owner.Token, "retagged", "1.0.0", "o", "r", "v1.0.0", "pkg.tgz")
+
+	// On GitHub, but under a different file name than the registry recorded.
+	a.publish(owner.Token, "renamed")
+	a.releaseOnGitHub(owner.Token, "renamed", "1.0.0", "o", "renamed", "v1.0.0", "old.tgz")
+	a.github.setDownloads("o", "renamed", "v1.0.0", map[string]int64{"new.tgz": 40})
+
+	if err := Collect(context.Background(), discardLogger(), testPool); err != nil {
+		t.Fatalf("collect: %v", err)
+	}
+
+	for _, name := range []string{"elsewhere", "retagged", "renamed"} {
+		res := a.expect(http.StatusOK, http.MethodGet, "/packages/"+name+"/downloads", "")
+		var downloads Downloads
+		res.json(t, &downloads)
+		if downloads.Total != 0 {
+			t.Errorf("%s: total = %d, want nothing sampled", name, downloads.Total)
+		}
 	}
 }
