@@ -151,6 +151,35 @@ button:focus-visible { outline: none; border-color: var(--flame); box-shadow: 0 
 .token-row .name, .pkg-row .name { font-weight: 600; }
 .token-row time, .token-row .meta, .pkg-row .meta { color: var(--muted); font-size: .85rem; }
 .token-row button, .pkg-row button { margin-left: auto; padding: .2rem .7rem; font-size: .85rem; }
+.stat { display: flex; align-items: baseline; gap: .5rem; flex-wrap: wrap; margin-top: 1.25rem; }
+.stat .count { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-weight: 600; }
+.stat .note { color: var(--muted); font-size: .8rem; }
+.chart { display: block; width: 100%; height: 4rem; margin-top: .5rem; }
+.chart rect { fill: var(--daylight); }
+.chart-scale { display: flex; justify-content: space-between; color: var(--muted); font-size: .75rem; }
+
+.readme { border-top: 1px solid var(--line); margin-top: 1.5rem; padding-top: .5rem; overflow-wrap: break-word; }
+.readme img { max-width: 100%; }
+.readme h1, .readme h2, .readme h3, .readme h4 {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  letter-spacing: -.01em; line-height: 1.3; margin: 1.4rem 0 .5rem;
+}
+.readme h1 { font-size: 1.25rem; }
+.readme h2 { font-size: 1.1rem; }
+.readme h3, .readme h4 { font-size: 1rem; }
+.readme pre {
+  background: var(--card); border: 1px solid var(--line); border-radius: .5rem;
+  padding: .7rem .8rem; overflow-x: auto;
+}
+.readme code { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: .9em; }
+.readme table { border-collapse: collapse; display: block; overflow-x: auto; }
+.readme th, .readme td { border: 1px solid var(--line); padding: .3rem .55rem; text-align: left; }
+.readme blockquote {
+  margin: .9rem 0; padding-left: .8rem;
+  border-left: 3px solid var(--line); color: var(--muted);
+}
+.readme hr { border: 0; border-top: 1px solid var(--line); }
+
 @media (prefers-reduced-motion: no-preference) {
   .lamp input, .lamp select { transition: box-shadow .15s ease, border-color .15s ease; }
 }
@@ -282,6 +311,141 @@ async function renderHome() {
   await search();
 }
 
+const SVG_NS = "http://www.w3.org/2000/svg";
+
+// Markdown and the sanitiser are loaded the first time a README is shown, so
+// searching the registry never pays for them. Both are served from /assets
+// under a versioned name, so the browser caches them for good.
+let markdownLibraries;
+function loadMarkdown() {
+  markdownLibraries ||= Promise.all([
+    import("/assets/marked-18.0.13.esm.js"),
+    import("/assets/purify-3.4.15.esm.js"),
+  ]);
+  return markdownLibraries;
+}
+
+// A README is written by whoever published the package, so it is untrusted
+// input: it goes through DOMPurify before it reaches the page, and this is the
+// only place in the UI that assigns HTML at all.
+async function renderMarkdown(text, sourceURL) {
+  const [marked, purify] = await loadMarkdown();
+  const panel = el("div", "readme");
+  panel.innerHTML = purify.default.sanitize(marked.parse(text, { gfm: true }));
+  resolveLinks(panel, sourceURL);
+  return panel;
+}
+
+// A README links and shows images by paths relative to its own repository.
+// Left alone they would point at the registry, so they are resolved against
+// the file the markdown came from: links to the repository, images to the raw
+// file GitHub serves.
+function resolveLinks(panel, sourceURL) {
+  let linkBase, imageBase;
+  try {
+    linkBase = new URL(sourceURL);
+    imageBase = new URL(sourceURL.replace("/blob/", "/raw/"));
+  } catch {
+    return;
+  }
+
+  for (const [nodes, attr, base] of [
+    [panel.querySelectorAll("a[href]"), "href", linkBase],
+    [panel.querySelectorAll("img[src]"), "src", imageBase],
+  ]) {
+    for (const node of nodes) {
+      let resolved;
+      try {
+        resolved = new URL(node.getAttribute(attr), base);
+      } catch {
+        node.removeAttribute(attr);
+        continue;
+      }
+      if (resolved.protocol !== "https:" && resolved.protocol !== "http:") {
+        node.removeAttribute(attr);
+        continue;
+      }
+      node.setAttribute(attr, resolved.href);
+      if (attr === "href") node.rel = "noopener nofollow ugc";
+    }
+  }
+}
+
+// One bar per day. Days the registry did not sample are gaps in the series,
+// so the range is filled in and a missing day draws nothing.
+function densify(days) {
+  const counts = new Map(days.map((d) => [d.day, d.count]));
+  const filled = [];
+  const at = new Date(days[0].day + "T00:00:00Z");
+  const last = new Date(days[days.length - 1].day + "T00:00:00Z");
+  while (at <= last) {
+    const key = at.toISOString().slice(0, 10);
+    filled.push({ day: key, count: counts.get(key) || 0 });
+    at.setUTCDate(at.getUTCDate() + 1);
+  }
+  return filled;
+}
+
+const CHART_DAYS = 90;
+
+function downloadsChart(days) {
+  const series = densify(days).slice(-CHART_DAYS);
+  const width = 300, height = 60;
+  const max = Math.max(...series.map((d) => d.count), 1);
+  const step = width / series.length;
+
+  const svg = document.createElementNS(SVG_NS, "svg");
+  svg.setAttribute("class", "chart");
+  svg.setAttribute("viewBox", "0 0 " + width + " " + height);
+  // The bars carry the shape; stretching them to the column is the point.
+  svg.setAttribute("preserveAspectRatio", "none");
+  svg.setAttribute("role", "img");
+  svg.setAttribute("aria-label",
+    "Downloads per day from " + series[0].day + " to " + series[series.length - 1].day);
+
+  series.forEach((d, i) => {
+    if (!d.count) return;
+    // A day with any downloads at all keeps a visible bar.
+    const h = Math.max(1, (d.count / max) * height);
+    const bar = document.createElementNS(SVG_NS, "rect");
+    bar.setAttribute("x", (i * step).toFixed(2));
+    bar.setAttribute("y", (height - h).toFixed(2));
+    bar.setAttribute("width", Math.max(step * 0.8, 0.5).toFixed(2));
+    bar.setAttribute("height", h.toFixed(2));
+    const label = document.createElementNS(SVG_NS, "title");
+    label.textContent = d.day + ": " + d.count;
+    bar.append(label);
+    svg.append(bar);
+  });
+
+  const scale = el("div", "chart-scale");
+  scale.append(el("span", "", series[0].day), el("span", "", series[series.length - 1].day));
+
+  const wrap = el("div");
+  wrap.append(svg, scale);
+  return wrap;
+}
+
+// Downloads are of the archives on GitHub, counted by GitHub, so the label
+// says so: an installed package and a fetched archive are not the same thing.
+function downloadsPanel(downloads) {
+  if (!downloads || (!downloads.total && !(downloads.days || []).length)) return null;
+
+  const wrap = el("div");
+  const stat = el("div", "stat");
+  stat.append(el("span", "count", downloads.total.toLocaleString() + " downloads"));
+  stat.append(el("span", "note", "of the release archives on GitHub"));
+  wrap.append(stat);
+
+  const days = downloads.days || [];
+  if (days.length < 2) {
+    wrap.append(el("p", "byline", "Daily figures start once the registry has sampled GitHub twice."));
+  } else {
+    wrap.append(downloadsChart(days));
+  }
+  return wrap;
+}
+
 async function renderPackage(name) {
   state("Looking up " + name + "...");
   let pkg;
@@ -311,6 +475,11 @@ async function renderPackage(name) {
     by.append(who, document.createTextNode(" (since " + day(pkg.createdAt) + ")"));
     frag.append(by);
   }
+
+  // The README is long, so it sits under the versions a visitor came for.
+  const downloads = el("div");
+  const readme = el("div");
+  frag.append(downloads);
 
   frag.append(el("div", "section-label", "Releases"));
   if (!pkg.releases || !pkg.releases.length) {
@@ -344,7 +513,54 @@ async function renderPackage(name) {
       frag.append(row);
     }
   }
+  frag.append(readme);
   view.replaceChildren(frag);
+
+  // Both read GitHub through the registry's cache, so they arrive after the
+  // page and a package with neither shows neither.
+  fillDownloads(pkg.name, downloads);
+  fillReadme(pkg.name, readme);
+}
+
+async function fillDownloads(name, host) {
+  let downloads;
+  try {
+    downloads = await fetchJSON("/packages/" + encodeURIComponent(name) + "/downloads");
+  } catch {
+    return;
+  }
+  const panel = downloadsPanel(downloads);
+  if (panel) host.replaceChildren(panel);
+}
+
+async function fillReadme(name, host) {
+  let readme;
+  try {
+    readme = await fetchJSON("/packages/" + encodeURIComponent(name) + "/readme");
+  } catch {
+    return;
+  }
+  if (!readme || !readme.markdown) return;
+
+  const label = el("div", "section-label", "Readme");
+  const byline = el("div", "byline");
+  if (readme.source) {
+    const source = el("a", "", "from the repository at " + readme.version);
+    source.href = readme.source;
+    source.rel = "noopener";
+    byline.append(source);
+  }
+  if (readme.stale) {
+    byline.append(document.createTextNode(
+      byline.childNodes.length ? ", last read when GitHub was reachable" : "Last read when GitHub was reachable"));
+  }
+
+  try {
+    host.replaceChildren(label, byline, await renderMarkdown(readme.markdown, readme.source));
+  } catch {
+    host.replaceChildren(label, byline,
+      el("p", "state", "This README could not be rendered here. The link above shows it on GitHub."));
+  }
 }
 
 async function renderUser(username) {
