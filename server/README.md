@@ -142,12 +142,19 @@ The figures count downloads of the archives on GitHub. A browser, a mirror, or
 a CI job fetching one is in the number, so it is not an install count, and the
 UI says so.
 
-The browser renders the markdown, so `web/assets` carries the two libraries
-that do it, `marked` and `DOMPurify`, with their licences beside them. A README
-is written by whoever published the package, so it is sanitised before it
-reaches the page. They are the only third-party code the UI runs, they are
-served from the binary rather than a CDN, and their file names carry their
-version so an upgrade is a new name.
+The browser renders the markdown with two libraries, `marked` and `DOMPurify`.
+A README is written by whoever published the package, so it is sanitised before
+it reaches the page. They are the only third-party code the UI runs, and they
+are served from the binary rather than a CDN, so a page load reaches no third
+party.
+
+Their bytes are not in the repository. `scripts/fetch-web-assets.sh` downloads
+the pinned versions, refuses anything whose sha256 does not match, and leaves
+them in `web/assets` for the embed to pick up; the digests are of what npm
+published. Run it before building or testing the server, or the build stops on
+an embed with nothing to embed. A rebuild with the files already there fetches
+nothing. To move a version, change the pin, the digest, and the file name in
+the same edit: the name carries the version, and the page asks for it by name.
 
 ## Accounts
 
@@ -168,7 +175,7 @@ cmd/collect/       daily GitHub sample, run as a Kubernetes CronJob
 migrations/        the schema, embedded in every binary
 src/               server, handlers, store, validation, middleware
 web/               browser UI, CLI installer, and the UI's scripts, embedded
-scripts/           schema dump helper
+scripts/           schema dump and web asset fetch helpers
 ```
 
 ## Running it
@@ -179,10 +186,14 @@ Requires Go 1.26 and a Postgres. `DATABASE_URL` is the only required setting.
 docker run -d --name lpm-pg -p 5432:5432 \
   -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=lpm postgres:18
 
+scripts/fetch-web-assets.sh
 export DATABASE_URL='postgres://postgres:postgres@localhost:5432/lpm'
 go run ./cmd/migrate
 go run .
 ```
+
+The first line fetches the UI's markdown libraries, which are not committed.
+Every build needs them once; the Dockerfile and CI run the same script.
 
 `.env` is read if present, so the exports can live there instead. The server
 listens on `:8080`.
@@ -237,6 +248,7 @@ Pick the number matching what that database already has, then migrate normally.
 ## Tests
 
 ```sh
+scripts/fetch-web-assets.sh                       # once per checkout
 go test ./...                                     # unit and failure paths
 TEST_DATABASE_URL='postgres://...' go test ./...  # adds the end-to-end suite
 ```

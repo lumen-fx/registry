@@ -16,6 +16,11 @@ RUN go mod download
 COPY cli /src/cli
 COPY server /src/server
 
+# The libraries the UI renders README markdown with are not in the repository.
+# The build fetches them at their pinned versions, checks their digests, and
+# the server embeds what it fetched.
+RUN scripts/fetch-web-assets.sh
+
 ARG VERSION=dev
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath \
         -ldflags "-s -w -X main.version=${VERSION}" \

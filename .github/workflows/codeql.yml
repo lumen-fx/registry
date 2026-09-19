@@ -49,6 +49,10 @@ jobs:
           languages: ${{ matrix.language }}
           build-mode: ${{ matrix.build-mode }}
 
+      - name: Fetch web assets
+        if: matrix.language == 'go'
+        run: server/scripts/fetch-web-assets.sh
+
       - name: build
         if: matrix.language == 'go'
         run: |

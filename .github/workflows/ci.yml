@@ -52,6 +52,12 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: server/go.mod
+      # The libraries the UI renders README markdown with are fetched rather
+      # than committed, and the server embeds them, so nothing here compiles
+      # without them.
+      - name: Fetch web assets
+        run: server/scripts/fetch-web-assets.sh
+
       - name: go vet
         run: |
           set -euo pipefail
@@ -88,6 +94,12 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: server/go.mod
+      # The libraries the UI renders README markdown with are fetched rather
+      # than committed, and the server embeds them, so nothing here compiles
+      # without them.
+      - name: Fetch web assets
+        run: server/scripts/fetch-web-assets.sh
+
       - name: go test
         run: |
           set -euo pipefail
