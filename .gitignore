@@ -110,3 +110,8 @@ cli/cli
 server/lpm-server
 server/server
 cli/LICENSE
+
+# Browser libraries the UI renders README markdown with. Fetched by
+# server/scripts/fetch-web-assets.sh, which pins the version and checks the
+# digest, so the bytes are never committed.
+server/web/assets/

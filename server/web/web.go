@@ -1,7 +1,11 @@
 // Package web holds the registry's browser UI: one page, the two libraries it
 // renders README markdown with, and the CLI installer. All of it is embedded,
-// so the server binary serves it with nothing extra to deploy and no build
-// step.
+// so the server binary serves it with nothing extra to deploy.
+//
+// The libraries are not in the repository. scripts/fetch-web-assets.sh
+// downloads them at their pinned versions and checks their digests, and this
+// package embeds what it finds, so a build that skipped the script stops here
+// rather than shipping a page that cannot render a README.
 package web
 
 import "embed"
