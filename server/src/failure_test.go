@@ -42,6 +42,8 @@ func TestDatabaseFailuresAnswer500(t *testing.T) {
 		{http.MethodGet, "/packages/alice-tool", "", false, http.StatusInternalServerError},
 		{http.MethodGet, "/packages/alice-tool/releases", "", false, http.StatusInternalServerError},
 		{http.MethodGet, "/packages/alice-tool/releases/1.0.0", "", false, http.StatusInternalServerError},
+		{http.MethodGet, "/packages/alice-tool/readme", "", false, http.StatusInternalServerError},
+		{http.MethodGet, "/packages/alice-tool/downloads", "", false, http.StatusInternalServerError},
 		{http.MethodGet, "/auth/me", "", true, http.StatusInternalServerError},
 		{http.MethodPost, "/auth/logout", "", true, http.StatusInternalServerError},
 		{http.MethodGet, "/tokens", "", true, http.StatusInternalServerError},
@@ -138,6 +140,24 @@ func TestStoreFailuresAreWrapped(t *testing.T) {
 
 	add("deletePackage", s.deletePackage(ctx, publisher, packaged))
 
+	_, err = s.getReadme(ctx, uuid.New())
+	add("getReadme", err)
+
+	add("saveReadme", s.saveReadme(ctx, readmeCache{ReleaseID: uuid.New(), Status: statusMissing}))
+
+	add("saveDownloadSnapshot", s.saveDownloadSnapshot(ctx, uuid.New(), time.Now(), 1))
+
+	_, err = s.packageDownloads(ctx, uuid.New())
+	add("packageDownloads", err)
+
+	_, err = s.collectTargets(ctx)
+	add("collectTargets", err)
+
+	_, err = s.readmeFor(ctx, Release{ID: uuid.New()}, false)
+	add("readmeFor", err)
+
+	add("Collect", Collect(ctx, discardLogger(), s.db))
+
 	for _, c := range calls {
 		if c.err == nil {
 			t.Errorf("%s returned nil, want a query error", c.name)
@@ -156,6 +176,9 @@ func TestStoreFailuresAreWrapped(t *testing.T) {
 	}
 	if _, err := s.tokenUser(ctx, "lpm_deadbeef"); errors.Is(err, ErrInvalidCredentials) {
 		t.Error("a query failure was reported as ErrInvalidCredentials")
+	}
+	if _, err := s.getReadme(ctx, uuid.New()); errors.Is(err, ErrReadmeNotCached) {
+		t.Error("a query failure was reported as ErrReadmeNotCached")
 	}
 }
 
