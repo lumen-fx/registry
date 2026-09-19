@@ -11,6 +11,7 @@ single Go binary with no runtime dependencies.
 | `GET` | `/` | none | The web UI. Static, no database access, doubles as liveness. |
 | `GET` | `/health` | none | Pings the pool. `503` when the database is down. |
 | `GET` | `/install.sh` | none | Installer for the `lpm` CLI. Static. |
+| `GET` | `/assets/{asset}` | none | The scripts the UI renders README markdown with. Versioned, cached for good. |
 | `GET` | `/auth/github/login` | none | Starts GitHub sign-in with a redirect. |
 | `GET` | `/auth/github/callback` | none | Finishes sign-in and sets the session cookie. |
 | `POST` | `/auth/logout` | session | Ends the browser session. |
@@ -24,6 +25,8 @@ single Go binary with no runtime dependencies.
 | `POST` | `/packages` | token | `201`, or `409` when the name is taken. |
 | `GET` | `/packages/{package}` | none | One package with its releases, newest first. |
 | `DELETE` | `/packages/{package}` | session or token | Publisher only. `204`, or `409` when it has releases. |
+| `GET` | `/packages/{package}/readme` | none | The newest release's README. `404` when there is none. |
+| `GET` | `/packages/{package}/downloads` | none | Downloads of the package's archives, total and per day. |
 | `GET` | `/packages/{package}/releases` | none | Just the releases. |
 | `POST` | `/packages/{package}/releases` | token | Publisher only. `403` for anyone else. |
 | `GET` | `/packages/{package}/releases/{version}` | none | One release. |
@@ -111,6 +114,41 @@ client can fix a whole form from one response:
 A release and its artifacts are written together, so a `422` or a conflict
 leaves the version free for the next attempt.
 
+## READMEs and downloads
+
+The registry stores no bytes, so it holds neither the documentation for a
+package nor a count of its downloads. Both come from the publisher's GitHub
+release and are cached here, so a page view does not depend on GitHub
+answering.
+
+The repository is read off the artifacts: a release archive at
+`https://github.com/<owner>/<repo>/releases/download/<tag>/<asset>` names the
+repository and the tag. A package whose archives are hosted anywhere else has
+no README and no download figures here, and there is no field to declare one.
+
+`GET /packages/{package}/readme` answers with the newest release's README as it
+stood at that tag, as markdown. The browser renders it. A fetch that fails
+leaves the copy from before it, marked `stale`, rather than blanking the page;
+a README the publisher deletes stops being served. Nothing to show is a `404`.
+
+`GET /packages/{package}/downloads` answers with `total`, the newest reading of
+every archive the package has ever released, and `days`, one entry per day.
+GitHub reports a running total per asset and keeps no history, so the daily
+figures are the rise between two samples: `/collect` takes one a day, the first
+sample of an archive draws no bar, and a day the collector does not run leaves a
+gap the next run absorbs.
+
+The figures count downloads of the archives on GitHub. A browser, a mirror, or
+a CI job fetching one is in the number, so it is not an install count, and the
+UI says so.
+
+The browser renders the markdown, so `web/assets` carries the two libraries
+that do it, `marked` and `DOMPurify`, with their licences beside them. A README
+is written by whoever published the package, so it is sanitised before it
+reaches the page. They are the only third-party code the UI runs, they are
+served from the binary rather than a CDN, and their file names carry their
+version so an upgrade is a new name.
+
 ## Accounts
 
 Accounts come from GitHub sign-in; there are no passwords. The OAuth callback
@@ -126,9 +164,10 @@ without them, sign-in answers `503` and the rest of the API works read-only.
 ```
 main.go            process lifecycle
 cmd/migrate/       standalone migrator, run as a Kubernetes Job
-migrations/        the schema, embedded in both binaries
+cmd/collect/       daily GitHub sample, run as a Kubernetes CronJob
+migrations/        the schema, embedded in every binary
 src/               server, handlers, store, validation, middleware
-web/               browser UI and CLI installer, embedded in the binary
+web/               browser UI, CLI installer, and the UI's scripts, embedded
 scripts/           schema dump helper
 ```
 
@@ -148,11 +187,21 @@ go run .
 `.env` is read if present, so the exports can live there instead. The server
 listens on `:8080`.
 
+```sh
+go run ./cmd/collect
+```
+
+reads GitHub once for every release in the registry and exits. Without it a
+package page shows no README and no downloads, because nothing has been
+sampled yet.
+
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `DATABASE_URL` | none, required | Postgres connection string. |
 | `GITHUB_CLIENT_ID` | none | OAuth app client id. Sign-in is `503` without it. |
 | `GITHUB_CLIENT_SECRET` | none | OAuth app client secret. |
+| `GITHUB_TOKEN` | none | Read-only token for the README and download calls. Sixty calls an hour without one. |
+| `GITHUB_API_URL` | `https://api.github.com` | Where those calls go. The tests point it at a stand-in. |
 | `MIGRATE_ON_BOOT` | `false` | Migrate before serving. Local convenience only. |
 | `TEST_DATABASE_URL` | none | Database for the end-to-end tests. |
 

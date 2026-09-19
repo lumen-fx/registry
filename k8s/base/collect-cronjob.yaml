@@ -1,0 +1,66 @@
+# Samples GitHub once a day for every release in the registry: the download
+# counter of each archive and the README of each package's newest release.
+#
+# GitHub keeps no history of its download counters, so the chart on a package
+# page is built from these samples. A day this does not run is a day with no
+# bar, and the next run attributes the whole gap to itself.
+#
+# It runs before lpm-update, which restarts the deployment, so a sample is
+# never cut short by a rollout.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: lpm-collect
+  namespace: lpm
+spec:
+  schedule: "0 4 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 1800
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: lpm-server
+            app.kubernetes.io/component: collect
+        spec:
+          restartPolicy: Never
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: collect
+              image: ghcr.io/lumen-fx/registry:main
+              # The tag moves, and Kubernetes only defaults to Always for
+              # :latest.
+              imagePullPolicy: Always
+              command: ["/collect"]
+              env:
+                - name: DATABASE_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: lpm-postgres
+                      key: DATABASE_URL
+              # Anonymous calls are limited to sixty an hour per address, which
+              # one pass can spend. The secret is optional so the job still
+              # runs without it, on a registry small enough not to need it.
+              envFrom:
+                - secretRef:
+                    name: lpm-github-token
+                    optional: true
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
+                limits:
+                  memory: 128Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]

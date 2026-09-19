@@ -38,3 +38,41 @@ func TestInstallScriptIsServed(t *testing.T) {
 		t.Errorf("body = %.80q..., want the installer script", body)
 	}
 }
+
+// The README panel renders markdown in the browser, so the libraries that do
+// it are served from the binary rather than a CDN. They are versioned in their
+// name and cached accordingly.
+func TestAssetsAreServed(t *testing.T) {
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/assets/marked-18.0.13.esm.js", nil)
+	req.SetPathValue("asset", "marked-18.0.13.esm.js")
+	NewServer(nil).AssetHandler(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/javascript") {
+		t.Errorf("Content-Type = %q, want text/javascript", ct)
+	}
+	if cc := rec.Header().Get("Cache-Control"); !strings.Contains(cc, "immutable") {
+		t.Errorf("Cache-Control = %q, want an immutable asset", cc)
+	}
+	if rec.Body.Len() == 0 {
+		t.Error("body is empty")
+	}
+}
+
+// Only the scripts are reachable: the licences ship in the repository, and a
+// name that is not there is a 404 rather than a server error.
+func TestUnknownAssetsAreNotFound(t *testing.T) {
+	for _, name := range []string{"marked-18.0.13.LICENSE", "nothing.js", "../index.html"} {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/assets/x", nil)
+		req.SetPathValue("asset", name)
+		NewServer(nil).AssetHandler(rec, req)
+
+		if rec.Code != http.StatusNotFound {
+			t.Errorf("%s = %d, want 404", name, rec.Code)
+		}
+	}
+}

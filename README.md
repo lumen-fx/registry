@@ -36,8 +36,9 @@ tag releases everything.
 
 ## Deploying
 
-The image carries the server and the migrator, so a rollout and its migration
-Job always run the same code. Nothing needs building by hand.
+The image carries the server, the migrator, and the collector, so a rollout,
+its migration Job, and the daily sample always run the same code. Nothing needs
+building by hand.
 
 `k8s/base` runs Postgres in the cluster as a StatefulSet with a 10Gi volume, one
 replica, no replication or failover. One command does the whole thing:
@@ -130,6 +131,9 @@ All paths below are under `k8s/base`.
   arriving with `lost+found` does not stop `initdb`.
 - **migration-job.yaml**: waits for Postgres, runs `/migrate`, exits. Name it
   per release so each deploy gets its own Job.
+- **collect-cronjob.yaml**: runs `/collect` daily, which reads each package's
+  README and download counters from GitHub. Give it `lpm-github-token` when
+  sixty anonymous calls an hour stop being enough.
 - **deployment.yaml**: two replicas, surge-only rollout. Liveness probes `/`
   and readiness probes `/health`: a database blip should fail readiness, not
   restart every pod.

@@ -55,6 +55,7 @@ type api struct {
 	t      *testing.T
 	server *Server
 	url    string
+	github *githubStub
 }
 
 // newAPI empties the tables, so each test starts from a known database.
@@ -85,9 +86,15 @@ func newAPI(t *testing.T) *api {
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprintf(w, `{"id":%d,"login":%q}`, hash.Sum32(), login)
 	})
+	// The same stand-in answers the repository calls a README and the
+	// download counts come from; a test says what GitHub holds through it.
+	stub := &githubStub{}
+	stub.register(github)
+
 	githubServer := httptest.NewServer(github)
 	t.Cleanup(githubServer.Close)
 
+	t.Setenv("GITHUB_API_URL", githubServer.URL)
 	t.Setenv("GITHUB_CLIENT_ID", "test-client")
 	t.Setenv("GITHUB_CLIENT_SECRET", "test-secret")
 	t.Setenv("GITHUB_AUTHORIZE_URL", githubServer.URL+"/authorize")
@@ -100,7 +107,7 @@ func newAPI(t *testing.T) *api {
 	httpServer := httptest.NewServer(handler)
 	t.Cleanup(httpServer.Close)
 
-	return &api{t: t, server: server, url: httpServer.URL}
+	return &api{t: t, server: server, url: httpServer.URL, github: stub}
 }
 
 type response struct {

@@ -10,10 +10,11 @@ import (
 type Server struct {
 	db     *pgxpool.Pool
 	github githubOAuth
+	source githubSource
 }
 
 func NewServer(db *pgxpool.Pool) *Server {
-	return &Server{db: db, github: configGitHub()}
+	return &Server{db: db, github: configGitHub(), source: configGitHubSource()}
 }
 
 // Routes maps paths. Bare patterns give JSON 405s.
@@ -30,6 +31,9 @@ func (s *Server) Routes() *http.ServeMux {
 
 	mux.HandleFunc("GET /install.sh", s.InstallScriptHandler)
 	mux.HandleFunc("/install.sh", methodNotAllowed(http.MethodGet))
+
+	mux.HandleFunc("GET /assets/{asset}", s.AssetHandler)
+	mux.HandleFunc("/assets/{asset}", methodNotAllowed(http.MethodGet))
 
 	mux.HandleFunc("GET /users/{username}", s.GetUserHandler)
 	mux.HandleFunc("/users/{username}", methodNotAllowed(http.MethodGet))
@@ -63,6 +67,12 @@ func (s *Server) Routes() *http.ServeMux {
 	mux.HandleFunc("GET /packages/{package}", s.GetPackageHandler)
 	mux.HandleFunc("DELETE /packages/{package}", s.DeletePackageHandler)
 	mux.HandleFunc("/packages/{package}", methodNotAllowed(http.MethodGet, http.MethodDelete))
+
+	mux.HandleFunc("GET /packages/{package}/readme", s.PackageReadmeHandler)
+	mux.HandleFunc("/packages/{package}/readme", methodNotAllowed(http.MethodGet))
+
+	mux.HandleFunc("GET /packages/{package}/downloads", s.PackageDownloadsHandler)
+	mux.HandleFunc("/packages/{package}/downloads", methodNotAllowed(http.MethodGet))
 
 	mux.HandleFunc("GET /packages/{package}/releases", s.PackageReleasesHandler)
 	mux.HandleFunc("POST /packages/{package}/releases", s.PublishReleaseHandler)
