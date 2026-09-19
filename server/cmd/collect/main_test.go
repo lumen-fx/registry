@@ -4,6 +4,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/lumen-fx/registry/server/src"
 )
 
 func TestRunNeedsADatabaseURL(t *testing.T) {
@@ -36,6 +38,12 @@ func TestRunSurvivesAnUnreachableGitHub(t *testing.T) {
 	}
 	t.Setenv("DATABASE_URL", dsn)
 	t.Setenv("GITHUB_API_URL", "http://127.0.0.1:1")
+
+	// This package does not share the server suite's schema setup, and the
+	// tests of the two run against the same database in any order.
+	if err := src.RunMigrations(dsn); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
 
 	if err := run(); err != nil {
 		t.Errorf("run = %v, want nil", err)
